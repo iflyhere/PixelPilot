@@ -7,9 +7,7 @@ import android.content.Intent;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.util.Log;
-import android.view.View;
 
-import com.openipc.pixelpilot.databinding.ActivityVideoBinding;
 import com.openipc.wfbngrtl8812.WfbNgLink;
 
 import java.util.HashMap;
@@ -22,7 +20,7 @@ public class WfbLinkManager extends BroadcastReceiver {
     private static final String TAG = "pixelpilot";
     static Map<String, UsbDevice> activeWifiAdapters = new HashMap<>();
     private final WfbNgLink wfbLink;
-    private final ActivityVideoBinding binding;
+    private final LinkStatusView status;
     private final Context context;
     private int wifiChannel;
     private Bandwidth bandWidth;
@@ -42,8 +40,8 @@ public class WfbLinkManager extends BroadcastReceiver {
         }
     }
 
-    public WfbLinkManager(Context context, ActivityVideoBinding binding, WfbNgLink wfbNgLink) {
-        this.binding = binding;
+    public WfbLinkManager(Context context, LinkStatusView status, WfbNgLink wfbNgLink) {
+        this.status = status;
         this.context = context;
         this.wfbLink = wfbNgLink;
     }
@@ -130,8 +128,7 @@ public class WfbLinkManager extends BroadcastReceiver {
                 (android.hardware.usb.UsbManager) context.getSystemService(Context.USB_SERVICE);
         for (Map.Entry<String, UsbDevice> entry : attachedAdapters.entrySet()) {
             if (!usbManager.hasPermission(entry.getValue())) {
-                binding.tvMessage.setVisibility(View.VISIBLE);
-                binding.tvMessage.setText("No permission for wifi adapter(s) " + entry.getValue().getDeviceName());
+                status.showLinkMessage("No permission for wifi adapter(s) " + entry.getValue().getDeviceName());
                 // Android 14 refuses to deliver a PendingIntent built from an implicit
                 // intent to a runtime registered receiver, so the permission result never
                 // arrives unless the package is set explicitly.
@@ -172,15 +169,11 @@ public class WfbLinkManager extends BroadcastReceiver {
         }
 
         if (activeWifiAdapters.isEmpty()) {
-            String text = "No compatible wifi adapter found.";
-            binding.tvMessage.setText(text);
-            binding.tvMessage.setVisibility(View.VISIBLE);
+            status.showLinkMessage("No compatible wifi adapter found.");
 
             String wifi = VideoActivity.wirelessInfo();
             if (wifi != null) {
-                String local = "udp://" + wifi + ":5600";
-                binding.wifiMessage.setText(local);
-                binding.wifiMessage.setVisibility(View.VISIBLE);
+                status.showLocalStreamHint("udp://" + wifi + ":5600");
             }
         }
     }
@@ -212,12 +205,10 @@ public class WfbLinkManager extends BroadcastReceiver {
     }
 
     public synchronized boolean startAdapter(UsbDevice dev) {
-        binding.tvMessage.setVisibility(View.VISIBLE);
-        String text = "Starting wfb-ng channel " + wifiChannel + " with " + String.format(
-                "[%04X", dev.getVendorId()) + ":" + String.format("%04X]", dev.getProductId());
-        binding.tvMessage.setText(text);
+        status.showLinkMessage("Starting wfb-ng channel " + wifiChannel + " with " + String.format(
+                "[%04X", dev.getVendorId()) + ":" + String.format("%04X]", dev.getProductId()));
         if (!wfbLink.start(wifiChannel, bandWidth.getValue(), dev)) {
-            binding.tvMessage.setText("Could not open wifi adapter " + dev.getDeviceName());
+            status.showLinkMessage("Could not open wifi adapter " + dev.getDeviceName());
             return false;
         }
         return true;

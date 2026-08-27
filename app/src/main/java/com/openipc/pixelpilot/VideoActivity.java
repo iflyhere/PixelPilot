@@ -65,6 +65,7 @@ import com.openipc.videonative.VideoPlayer;
 import com.openipc.wfbngrtl8812.WfbNGStats;
 import com.openipc.wfbngrtl8812.WfbNGStatsChanged;
 import com.openipc.wfbngrtl8812.WfbNgLink;
+import com.openipc.xr.XrGoggleSession;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -101,7 +102,7 @@ import java.util.regex.Pattern;
 // Most basic implementation of an activity that uses VideoNative to stream a video
 // Into an Android Surface View
 public class VideoActivity extends AppCompatActivity implements IVideoParamsChanged,
-        WfbNGStatsChanged, MavlinkUpdate, SettingsChanged {
+        WfbNGStatsChanged, MavlinkUpdate, SettingsChanged, LinkStatusView {
     private static final String TAG = "pixelpilot";
     private static final int PICK_KEY_REQUEST_CODE = 1;
     private static final int PICK_DVR_REQUEST_CODE = 2;
@@ -348,7 +349,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         copyGSKey();
         wfbLink = new WfbNgLink(this);
         wfbLink.SetWfbNGStatsChanged(this);
-        wfbLinkManager = new WfbLinkManager(this, binding, wfbLink);
+        wfbLinkManager = new WfbLinkManager(this, this, wfbLink);
     }
 
     // ----------------------------------------------------------------------------
@@ -606,6 +607,9 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         // VR submenu
         setupVRSubMenu(popup);
 
+        // Immersive OpenXR submenu, headsets only
+        setupXrSubMenu(popup);
+
         // Channel submenu
         setupChannelSubMenu(popup);
 
@@ -657,6 +661,77 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
             resetApp();
             return false;
         });
+    }
+
+    /**
+     * Submenu for the immersive OpenXR mode. Only offered on a device that looks like a
+     * headset - on a phone there is no runtime to talk to, so the entry stays hidden.
+     */
+    private void setupXrSubMenu(PopupMenu popup) {
+        if (!XrGoggleSession.isSupportedDevice(this)) {
+            return;
+        }
+        SharedPreferences prefs = getSharedPreferences("general", MODE_PRIVATE);
+        SubMenu xrMenu = popup.getMenu().addSubMenu("VR goggles (OpenXR)");
+
+        xrMenu.add("Enter VR").setOnMenuItemClickListener(item -> {
+            startActivity(new Intent(this, XrVideoActivity.class));
+            return true;
+        });
+
+        MenuItem headLocked = xrMenu.add("Head locked");
+        headLocked.setCheckable(true);
+        headLocked.setChecked(prefs.getBoolean(XrVideoActivity.PREF_HEAD_LOCKED, true));
+        headLocked.setOnMenuItemClickListener(item -> {
+            boolean enabled = !item.isChecked();
+            item.setChecked(enabled);
+            prefs.edit().putBoolean(XrVideoActivity.PREF_HEAD_LOCKED, enabled).apply();
+            item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
+            item.setActionView(new View(this));
+            return false;
+        });
+
+        MenuItem passthrough = xrMenu.add("Passthrough");
+        passthrough.setCheckable(true);
+        passthrough.setChecked(prefs.getBoolean(XrVideoActivity.PREF_PASSTHROUGH, false));
+        passthrough.setOnMenuItemClickListener(item -> {
+            boolean enabled = !item.isChecked();
+            item.setChecked(enabled);
+            prefs.edit().putBoolean(XrVideoActivity.PREF_PASSTHROUGH, enabled).apply();
+            item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
+            item.setActionView(new View(this));
+            return false;
+        });
+
+        MenuItem sharpening = xrMenu.add("Layer sharpening");
+        sharpening.setCheckable(true);
+        sharpening.setChecked(prefs.getBoolean(XrVideoActivity.PREF_SHARPENING, true));
+        sharpening.setOnMenuItemClickListener(item -> {
+            boolean enabled = !item.isChecked();
+            item.setChecked(enabled);
+            prefs.edit().putBoolean(XrVideoActivity.PREF_SHARPENING, enabled).apply();
+            item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
+            item.setActionView(new View(this));
+            return false;
+        });
+
+        SubMenu refresh = xrMenu.addSubMenu("Display refresh rate");
+        float currentHz = prefs.getFloat(XrVideoActivity.PREF_REFRESH_HZ, 0f);
+        final float[] options = {0f, 72f, 90f, 120f};
+        for (float hz : options) {
+            String label = hz <= 0f ? "Auto (highest)" : String.format(Locale.US, "%.0f Hz", hz);
+            MenuItem entry = refresh.add(label);
+            entry.setCheckable(true);
+            entry.setChecked(Math.abs(currentHz - hz) < 0.5f);
+            final float selected = hz;
+            entry.setOnMenuItemClickListener(item -> {
+                prefs.edit().putFloat(XrVideoActivity.PREF_REFRESH_HZ, selected).apply();
+                return true;
+            });
+        }
+
+        MenuItem help = xrMenu.add("Controls: A recenter, B passthrough, X record, Y lock");
+        help.setEnabled(false);
     }
 
     /**
@@ -1267,24 +1342,12 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     private Uri openDvrFile() {
-        String dvrFolder = getSharedPreferences("general",
-                Context.MODE_PRIVATE).getString("dvr_folder_", "");
-        if (dvrFolder.isEmpty()) {
-            Log.e(TAG, "dvrFolder is empty");
-            return null;
-        }
-        Uri uri = Uri.parse(dvrFolder);
-        DocumentFile pickedDir = DocumentFile.fromTreeUri(this, uri);
-        if (pickedDir != null && pickedDir.canWrite()) {
-            LocalDateTime now = LocalDateTime.now();
-            String filename = getDvrFileName(getDvrFileNameTemplate(), now) + ".mp4";
-            DocumentFile newFile = pickedDir.createFile("video/mp4", filename);
+        String filename = DvrFiles.nextFileName(this);
+        Uri target = DvrFiles.createRecording(this);
+        if (target != null) {
             Toast.makeText(this, "Recording to " + filename, Toast.LENGTH_SHORT).show();
-            if (newFile == null)
-                Log.e(TAG, "dvr newFile null");
-            return newFile != null ? newFile.getUri() : null;
         }
-        return null;
+        return target;
     }
 
     private void startStopDvr() {
@@ -1463,7 +1526,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     public boolean getDvrMP4() {
-        return getSharedPreferences("general", Context.MODE_PRIVATE).getBoolean("dvr_fmp4", true);
+        return DvrFiles.fragmentedMp4(this);
     }
 
     public void setDvrMP4(boolean enabled) {
@@ -1705,6 +1768,22 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     @Override
+    public void showLinkMessage(String message) {
+        runOnUiThread(() -> {
+            binding.tvMessage.setVisibility(View.VISIBLE);
+            binding.tvMessage.setText(message);
+        });
+    }
+
+    @Override
+    public void showLocalStreamHint(String url) {
+        runOnUiThread(() -> {
+            binding.wifiMessage.setText(url);
+            binding.wifiMessage.setVisibility(View.VISIBLE);
+        });
+    }
+
+    @Override
     public void onNewMavlinkData(MavlinkData data) {
         runOnUiThread(() -> osdManager.render(data));
     }
@@ -1832,22 +1911,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     // pixelpilot_[yyyyMMdd-HHmmss]
     // ".mp4" will append later
     private String getDvrFileName(String template, LocalDateTime time) {
-        Matcher matcher = Pattern.compile("\\[([^\\]]*)\\]").matcher(template);
-        String fallbackTime = time.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
-
-        if (matcher.find()) {
-            String prefix = template.substring(0, matcher.start());
-            String pattern = matcher.group(1);
-            String suffix = template.substring(matcher.end());
-
-            try {
-                String timePart = time.format(DateTimeFormatter.ofPattern(pattern));
-                return prefix + timePart + suffix;
-            } catch (IllegalArgumentException e) {
-                return prefix + fallbackTime + suffix;
-            }
-        }
-        return "pixelpilot_" + fallbackTime;
+        return DvrFiles.fileName(template, time);
     }
 
     // Helper method to retrieve the drone username
@@ -1856,9 +1920,8 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         return getSharedPreferences("general", Context.MODE_PRIVATE).getString(PREF_DRONE_USERNAME, "root");
     }
 
-    private String getDvrFileNameTemplate()
-    {
-        return getSharedPreferences("general", Context.MODE_PRIVATE).getString(PREF_DVR_FILENAME, "pixelpilot_[yyyyMMdd-HHmmss]");
+    private String getDvrFileNameTemplate() {
+        return DvrFiles.template(this);
     }
 
     // Helper method to save the drone username
@@ -1870,10 +1933,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     private void setDvrFileName(String fileName) {
-        SharedPreferences prefs = getSharedPreferences("general", Context.MODE_PRIVATE);
-        SharedPreferences.Editor editor = prefs.edit();
-        editor.putString(PREF_DVR_FILENAME, fileName);
-        editor.apply();
+        DvrFiles.setTemplate(this, fileName);
     }
 
     // Helper method to retrieve the drone password

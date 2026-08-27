@@ -27,4 +27,5 @@ rootProject.name = "PixelPilot"
 include(":app")
 include(":app:videonative")
 include(":app:wfbngrtl8812")
+include(":app:xr")
 include(":app:mavlink")

@@ -59,6 +59,7 @@ dependencies {
     implementation(project(":app:mavlink"))
     implementation(project(":app:videonative"))
     implementation(project(":app:wfbngrtl8812"))
+    implementation(project(":app:xr"))
 
     implementation(libs.appcompat)
     implementation(libs.material)

@@ -1,5 +1,9 @@
 <resources>
     <string name="app_name">PixelPilot</string>
+    <string name="app_name_xr">PixelPilot VR</string>
+    <string name="xr_starting">Waiting for the wifi adapter…</string>
+    <string name="xr_entering">Entering VR…</string>
+    <string name="xr_failed">VR mode unavailable: %1$s — falling back to flat mode…</string>
     <string-array name="channels">
         <item>1</item>
         <item>2</item>
