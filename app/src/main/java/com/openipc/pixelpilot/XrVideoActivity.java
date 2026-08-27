@@ -5,7 +5,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
@@ -75,6 +77,10 @@ public class XrVideoActivity extends AppCompatActivity
 
     private boolean xrStarting;
     private boolean linkStarted;
+    private Surface xrSurface;
+    private volatile String lastStatus = "";
+    private boolean videoSeen;
+    private boolean statusScreenUsable = true;
     private ParcelFileDescriptor dvrFd;
 
     // Link quality haptics
@@ -241,6 +247,11 @@ public class XrVideoActivity extends AppCompatActivity
     @Override
     public void onXrReady(Surface videoSurface) {
         Log.i(TAG, "immersive session up, handing the swapchain surface to the decoder");
+        xrSurface = videoSurface;
+        // Put something on the layer before the decoder owns it. Without this the panel is
+        // an opaque black rectangle until the first frame arrives, which is
+        // indistinguishable from "nothing is being composited at all".
+        drawStatusScreen();
         // The decoder writes into the compositor swapchain from here on.
         videoPlayer.addAndStartDecoderReceiver(videoSurface, 0);
         videoPlayer.start();
@@ -321,6 +332,88 @@ public class XrVideoActivity extends AppCompatActivity
     }
 
     // ------------------------------------------------------------------------------
+    // "no signal" screen
+    // ------------------------------------------------------------------------------
+
+    /**
+     * Paints status straight into the compositor swapchain's Surface.
+     *
+     * <p>Only valid until MediaCodec becomes the producer for that Surface - a buffer queue
+     * has one producer - so this stops as soon as a frame has been decoded, and gives up
+     * quietly if the canvas is refused.
+     */
+    private void drawStatusScreen() {
+        if (videoSeen || !statusScreenUsable || xrSurface == null || !xrSurface.isValid()) {
+            return;
+        }
+        Canvas canvas = null;
+        try {
+            canvas = xrSurface.lockHardwareCanvas();
+            if (canvas == null) {
+                statusScreenUsable = false;
+                return;
+            }
+            paintStatus(canvas);
+            xrSurface.unlockCanvasAndPost(canvas);
+        } catch (Throwable t) {
+            // Most likely the decoder already connected as the producer.
+            Log.w(TAG, "status screen unavailable: " + t);
+            statusScreenUsable = false;
+            return;
+        }
+        handler.postDelayed(this::drawStatusScreen, 1000);
+    }
+
+    private void paintStatus(Canvas canvas) {
+        final int w = canvas.getWidth();
+        final int h = canvas.getHeight();
+
+        canvas.drawColor(Color.rgb(12, 12, 16));
+
+        Paint line = new Paint();
+        line.setColor(Color.rgb(70, 80, 100));
+        line.setStrokeWidth(Math.max(2f, h / 300f));
+        line.setStyle(Paint.Style.STROKE);
+        // A border and a centre cross: makes the panel's real extent and centre visible, so
+        // size and distance can be judged with nothing else on screen.
+        float inset = h / 40f;
+        canvas.drawRect(inset, inset, w - inset, h - inset, line);
+        float cx = w / 2f, cy = h / 2f, arm = h / 20f;
+        canvas.drawLine(cx - arm, cy, cx + arm, cy, line);
+        canvas.drawLine(cx, cy - arm, cx, cy + arm, line);
+
+        Paint title = new Paint();
+        title.setAntiAlias(true);
+        title.setColor(Color.rgb(235, 235, 240));
+        title.setTextSize(h / 14f);
+        title.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText("No video", cx, cy - h / 8f, title);
+
+        Paint body = new Paint();
+        body.setAntiAlias(true);
+        body.setColor(Color.rgb(170, 180, 195));
+        body.setTextSize(h / 28f);
+        body.setTextAlign(Paint.Align.CENTER);
+
+        String status = lastStatus;
+        float y = cy + h / 7f;
+        if (!status.isEmpty()) {
+            canvas.drawText(status, cx, y, body);
+            y += h / 20f;
+        }
+        canvas.drawText("channel " + VideoActivity.getChannel(this)
+                        + " @ " + VideoActivity.getBandwidth(this) + " MHz",
+                cx, y, body);
+        y += h / 20f;
+        String wifi = VideoActivity.wirelessInfo(this);
+        if (wifi != null) {
+            canvas.drawText("or push a stream to udp://" + wifi + ":5600", cx, y, body);
+            y += h / 20f;
+        }
+        canvas.drawText(xr != null && xr.isHeadLocked() ? "head locked" : "world locked", cx, y, body);
+    }
+
+    // ------------------------------------------------------------------------------
     // DVR
     // ------------------------------------------------------------------------------
 
@@ -378,6 +471,7 @@ public class XrVideoActivity extends AppCompatActivity
             return;
         }
         Log.i(TAG, "stream resolution " + videoW + "x" + videoH);
+        videoSeen = true;
         if (xr != null) {
             xr.setVideoResolution(videoW, videoH);
         }
@@ -416,6 +510,7 @@ public class XrVideoActivity extends AppCompatActivity
     @Override
     public void showLinkMessage(String message) {
         Log.i(TAG, message);
+        lastStatus = message;
         runOnUiThread(() -> {
             if (statusView != null && !linkStarted) {
                 statusView.setText(message);
