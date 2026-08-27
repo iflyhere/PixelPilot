@@ -86,6 +86,10 @@ class VideoDecoder
 
     void registerOnDecodingInfoChangedCallback(DECODING_INFO_CHANGED_CALLBACK decodingInfoChangedCallback);
 
+    // Enable / disable the low-latency and realtime-priority AMediaFormat keys.
+    // Applied the next time the decoder is configured, not to a running decoder.
+    void setLowLatency(bool enabled) { mLowLatency = enabled; }
+
     // If the decoder has been configured, feed NALU. Else search for configuration data and
     // configure as soon as possible
     //  If the input pipe was closed (surface has been removed or is not set yet), only buffer key frames
@@ -109,6 +113,8 @@ class VideoDecoder
 
     std::unique_ptr<std::thread> mCheckOutputThread[2]  = {nullptr, nullptr};
     bool                         USE_SW_DECODER_INSTEAD = false;
+    // Some decoders misbehave with the low-latency keys, so it stays user switchable.
+    std::atomic<bool>            mLowLatency            = true;
     // Holds the AMediaCodec instance, as well as the state (configured or not configured)
     Decoder      decoder{};
     DecodingInfo decodingInfo;

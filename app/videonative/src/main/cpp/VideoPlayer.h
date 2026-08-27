@@ -54,6 +54,8 @@ class VideoPlayer
 
     void setForwarding(const std::string& ip, int port, bool enabled);
 
+    void setLowLatency(bool enabled) { videoDecoder.setLowLatency(enabled); }
+
   private:
     void onNewNALU(const NALU& nalu);
 
