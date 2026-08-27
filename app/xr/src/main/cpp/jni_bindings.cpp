@@ -32,6 +32,18 @@ JNI_METHOD(void, nativeSetSwapchainSize)
     native(handle)->setSwapchainSize(width, height);
 }
 
+JNI_METHOD(void, nativeSetManifestDir)(JNIEnv* env, jclass clazz, jlong handle, jstring dir)
+{
+    (void) clazz;
+    if (dir == nullptr) return;
+    const char* chars = env->GetStringUTFChars(dir, nullptr);
+    if (chars != nullptr)
+    {
+        native(handle)->setManifestDir(std::string(chars));
+        env->ReleaseStringUTFChars(dir, chars);
+    }
+}
+
 JNI_METHOD(jboolean, nativeCreate)(JNIEnv* env, jclass clazz, jlong handle, jobject activity)
 {
     (void) clazz;

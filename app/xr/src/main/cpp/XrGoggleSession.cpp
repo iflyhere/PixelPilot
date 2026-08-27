@@ -1,11 +1,13 @@
 #include "XrGoggleSession.h"
 
 #include <android/log.h>
+#include <stdlib.h>
 #include <time.h>
 
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 
 #define TAG "pixelpilot-xr"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -106,6 +108,7 @@ bool XrGoggleSession::extensionSupported(const char* name) const
 bool XrGoggleSession::create(JNIEnv* env, jobject activity)
 {
     if (!initLoader(env, activity)) return false;
+    if (!resolveRuntime()) return false;
     if (!createInstance(env, activity)) return false;
     if (!createEgl()) return false;
     if (!createSession()) return false;
@@ -134,6 +137,126 @@ bool XrGoggleSession::create(JNIEnv* env, jobject activity)
         }
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------------
+// runtime discovery
+// ---------------------------------------------------------------------------------
+
+namespace
+{
+#if defined(__aarch64__)
+constexpr const char* kAbi = "arm64-v8a";
+#elif defined(__arm__)
+constexpr const char* kAbi = "armeabi-v7a";
+#elif defined(__x86_64__)
+constexpr const char* kAbi = "x86_64";
+#else
+constexpr const char* kAbi = "x86";
+#endif
+}  // namespace
+
+// True when a real runtime answered - a runtime-provided extension has to be in the list,
+// not just "the call did not fail".
+bool XrGoggleSession::runtimeAnswers()
+{
+    uint32_t count = 0;
+    if (XR_FAILED(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr)) || count == 0)
+    {
+        return false;
+    }
+    std::vector<XrExtensionProperties> props(count, {XR_TYPE_EXTENSION_PROPERTIES});
+    if (XR_FAILED(xrEnumerateInstanceExtensionProperties(nullptr, count, &count, props.data())))
+    {
+        return false;
+    }
+    for (const auto& p : props)
+    {
+        if (std::strcmp(p.extensionName, XR_KHR_ANDROID_SURFACE_SWAPCHAIN_EXTENSION_NAME) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Drops a runtime manifest next to our files and points the loader at it.
+bool XrGoggleSession::pointLoaderAt(const char* libraryPath)
+{
+    if (mManifestDir.empty()) return false;
+    const std::string manifest = mManifestDir + "/openxr_runtime.json";
+    {
+        std::ofstream out(manifest, std::ios::trunc);
+        if (!out) return false;
+        out << "{\n"
+            << "  \"file_format_version\": \"1.0.0\",\n"
+            << "  \"runtime\": {\n"
+            << "    \"name\": \"Android system OpenXR runtime\",\n"
+            << "    \"library_path\": \"" << libraryPath << "\"\n"
+            << "  }\n"
+            << "}\n";
+    }
+    setenv("XR_RUNTIME_JSON", manifest.c_str(), 1);
+    return true;
+}
+
+/*
+ * Horizon OS does not let the generic Khronos loader find its runtime on its own:
+ *
+ *   - there is no /system/etc/openxr/1/active_runtime.json
+ *   - the Khronos broker authorities exist but resolve to
+ *     internal.horizonos.openxr.DisabledRuntimeBroker, which returns no rows
+ *   - the loader binary has no knowledge of libopenxr_forwardloader.so
+ *
+ * The runtime is reached through libopenxr_forwardloader.so from the VrDriver APEX. That
+ * library is on our linker search path (VrDriver.apk!/lib/<abi> is added to every app's
+ * namespace) and exports xrNegotiateLoaderRuntimeInterface, i.e. as far as a loader is
+ * concerned it *is* the runtime. So if nothing answers out of the box, hand the loader an
+ * explicit manifest pointing at it.
+ *
+ * Candidates are tried in order and the one that answers is kept, so a device where the
+ * broker does work is left alone.
+ */
+bool XrGoggleSession::resolveRuntime()
+{
+    if (runtimeAnswers())
+    {
+        LOGI("runtime found without an override");
+        mRuntimeLibrary = "<system>";
+        return true;
+    }
+
+    const std::string apkPath = std::string("/apex/com.meta.xr/priv-app/VrDriver/VrDriver.apk!/lib/") +
+                                kAbi + "/libopenxr_forwardloader.so";
+    const char* candidates[] = {
+        // A bare file name means "use the system library search path", which is where the
+        // APEX library actually lives for us.
+        "libopenxr_forwardloader.so",
+        // Some loaders insist on an absolute path; Android's linker understands apk!/entry.
+        apkPath.c_str(),
+    };
+
+    for (const char* candidate : candidates)
+    {
+        if (!pointLoaderAt(candidate))
+        {
+            LOGW("could not write a runtime manifest into %s", mManifestDir.c_str());
+            break;
+        }
+        LOGI("trying runtime library_path=%s", candidate);
+        if (runtimeAnswers())
+        {
+            LOGI("runtime resolved via %s", candidate);
+            mRuntimeLibrary = candidate;
+            return true;
+        }
+    }
+
+    unsetenv("XR_RUNTIME_JSON");
+    setError(
+        "No OpenXR runtime answered. Tried the system default, then "
+        "libopenxr_forwardloader.so by name and by absolute APEX path.");
+    return false;
 }
 
 bool XrGoggleSession::initLoader(JNIEnv* env, jobject activity)

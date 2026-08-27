@@ -82,8 +82,14 @@ class XrGoggleSession
     // known stream resolution.
     void setSwapchainSize(int width, int height);
 
+    // Writable directory used to drop a runtime manifest, see resolveRuntime().
+    void setManifestDir(std::string dir) { mManifestDir = std::move(dir); }
+
   private:
     bool initLoader(JNIEnv* env, jobject activity);
+    bool resolveRuntime();
+    bool runtimeAnswers();
+    bool pointLoaderAt(const char* libraryPath);
     bool createInstance(JNIEnv* env, jobject activity);
     bool createEgl();
     bool createSession();
@@ -178,6 +184,8 @@ class XrGoggleSession
     XrPosef    mAnchorPose = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
     bool       mAnchorValid = false;
 
+    std::string        mManifestDir;
+    std::string        mRuntimeLibrary;
     std::vector<float> mRefreshRates;
     std::mutex         mErrorMutex;
     std::string        mLastError;

@@ -154,6 +154,8 @@ public final class XrGoggleSession {
     private void ensureHandle() {
         if (libraryLoaded && handle == 0) {
             handle = nativeAlloc();
+            // Somewhere writable for the runtime manifest the loader may need.
+            nativeSetManifestDir(handle, activity.getFilesDir().getAbsolutePath());
         }
     }
 
@@ -258,6 +260,8 @@ public final class XrGoggleSession {
     private static native void nativeFree(long handle);
 
     private static native void nativeSetSwapchainSize(long handle, int width, int height);
+
+    private static native void nativeSetManifestDir(long handle, String dir);
 
     private static native boolean nativeCreate(long handle, Activity activity);
 
