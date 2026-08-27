@@ -201,21 +201,19 @@ bool XrGoggleSession::pointLoaderAt(const char* libraryPath)
 }
 
 /*
- * Horizon OS does not let the generic Khronos loader find its runtime on its own:
+ * Fallback for a headset where the loader cannot find a runtime by itself.
  *
- *   - there is no /system/etc/openxr/1/active_runtime.json
- *   - the Khronos broker authorities exist but resolve to
- *     internal.horizonos.openxr.DisabledRuntimeBroker, which returns no rows
- *   - the loader binary has no knowledge of libopenxr_forwardloader.so
+ * On a Quest 3 this is not needed: the Khronos loader resolves the Horizon runtime through
+ * the org.khronos.openxr.runtime_broker content provider and the first candidate ("change
+ * nothing") wins. Querying that provider from `adb shell` returns no rows, but only because
+ * the shell does not hold org.khronos.openxr.permission.OPENXR - the app does.
  *
- * The runtime is reached through libopenxr_forwardloader.so from the VrDriver APEX. That
- * library is on our linker search path (VrDriver.apk!/lib/<abi> is added to every app's
- * namespace) and exports xrNegotiateLoaderRuntimeInterface, i.e. as far as a loader is
- * concerned it *is* the runtime. So if nothing answers out of the box, hand the loader an
- * explicit manifest pointing at it.
- *
- * Candidates are tried in order and the one that answers is kept, so a device where the
- * broker does work is left alone.
+ * It is kept because the loader has exactly three discovery paths - the broker,
+ * active_runtime.json on disk, and XR_RUNTIME_JSON - and a device that offers neither of the
+ * first two would otherwise be dead in the water. Where that happens the runtime is still
+ * reachable as libopenxr_forwardloader.so from the VrDriver APEX: that library sits on every
+ * app's linker search path and exports xrNegotiateLoaderRuntimeInterface, so as far as a
+ * loader is concerned it *is* the runtime.
  */
 bool XrGoggleSession::resolveRuntime()
 {
@@ -527,34 +525,88 @@ bool XrGoggleSession::createSpaces()
                  "xrCreateReferenceSpace(LOCAL)");
 }
 
+/*
+ * MediaCodec is the producer for an Android surface swapchain, so the image description
+ * fields are not really ours to choose. The extension documents them as ignored, but Meta's
+ * runtime validates them: passing the "obvious" 1s gets XR_ERROR_VALIDATION_FAILURE on a
+ * Quest 3. Rather than hardcode one guess, try the plausible shapes and log which one the
+ * runtime accepted.
+ */
 bool XrGoggleSession::createSwapchain(JNIEnv* env)
 {
-    XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-    // An Android surface swapchain is produced into by MediaCodec, so format and the
-    // image-layout fields are not ours to pick.
-    info.usageFlags  = XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-    info.format      = 0;
-    info.sampleCount = 1;
-    info.width       = (uint32_t) mSwapchainWidth;
-    info.height      = (uint32_t) mSwapchainHeight;
-    info.faceCount   = 1;
-    info.arraySize   = 1;
-    info.mipCount    = 1;
+    // GL_RGBA8, for the variant where the runtime wants a real format.
+    constexpr int64_t kGlRgba8 = 0x8058;
 
-    jobject surface = nullptr;
-    if (!check(mXrCreateSwapchainAndroidSurfaceKHR(mSession, &info, &mSwapchain, &surface),
-               "xrCreateSwapchainAndroidSurfaceKHR"))
+    struct Variant
     {
-        return false;
-    }
-    if (surface == nullptr)
+        const char*          what;
+        XrSwapchainUsageFlags usage;
+        int64_t              format;
+        uint32_t             counts;  // sampleCount / faceCount / arraySize / mipCount
+    };
+    const Variant variants[] = {
+        {"ignored fields zeroed", XR_SWAPCHAIN_USAGE_SAMPLED_BIT, 0, 0},
+        {"ignored fields set to 1", XR_SWAPCHAIN_USAGE_SAMPLED_BIT, 0, 1},
+        {"zeroed + color attachment",
+         XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
+         0,
+         0},
+        {"zeroed + explicit RGBA8", XR_SWAPCHAIN_USAGE_SAMPLED_BIT, kGlRgba8, 0},
+        {"1s + explicit RGBA8", XR_SWAPCHAIN_USAGE_SAMPLED_BIT, kGlRgba8, 1},
+    };
+
+    jobject  surface = nullptr;
+    XrResult last    = XR_ERROR_VALIDATION_FAILURE;
+    for (const auto& variant : variants)
     {
-        setError("xrCreateSwapchainAndroidSurfaceKHR returned a null Surface");
-        return false;
+        XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+        info.usageFlags  = variant.usage;
+        info.format      = variant.format;
+        info.sampleCount = variant.counts;
+        info.width       = (uint32_t) mSwapchainWidth;
+        info.height      = (uint32_t) mSwapchainHeight;
+        info.faceCount   = variant.counts;
+        info.arraySize   = variant.counts;
+        info.mipCount    = variant.counts;
+
+        surface = nullptr;
+        last    = mXrCreateSwapchainAndroidSurfaceKHR(mSession, &info, &mSwapchain, &surface);
+        if (XR_SUCCEEDED(last) && surface != nullptr)
+        {
+            LOGI("android surface swapchain %dx%d created (%s)",
+                 mSwapchainWidth,
+                 mSwapchainHeight,
+                 variant.what);
+            mVideoSurface = env->NewGlobalRef(surface);
+            return true;
+        }
+        char name[XR_MAX_RESULT_STRING_SIZE] = {0};
+        xrResultToString(mInstance, last, name);
+        LOGW("swapchain variant \'%s\' rejected: %s", variant.what, name);
+        if (XR_SUCCEEDED(last) && mSwapchain != XR_NULL_HANDLE)
+        {
+            // Succeeded but handed back no Surface - not usable, do not leak it.
+            xrDestroySwapchain(mSwapchain);
+            mSwapchain = XR_NULL_HANDLE;
+        }
     }
-    mVideoSurface = env->NewGlobalRef(surface);
-    LOGI("android surface swapchain %dx%d created", mSwapchainWidth, mSwapchainHeight);
-    return true;
+
+    // Nothing worked. Dump what the runtime does offer so the next attempt is informed.
+    uint32_t formatCount = 0;
+    if (XR_SUCCEEDED(xrEnumerateSwapchainFormats(mSession, 0, &formatCount, nullptr)) &&
+        formatCount > 0)
+    {
+        std::vector<int64_t> formats(formatCount);
+        if (XR_SUCCEEDED(
+                xrEnumerateSwapchainFormats(mSession, formatCount, &formatCount, formats.data())))
+        {
+            for (int64_t f : formats)
+            {
+                LOGI("runtime swapchain format 0x%llx", (unsigned long long) f);
+            }
+        }
+    }
+    return check(last, "xrCreateSwapchainAndroidSurfaceKHR");
 }
 
 XrAction XrGoggleSession::boolAction(const char* name, const char* localized)

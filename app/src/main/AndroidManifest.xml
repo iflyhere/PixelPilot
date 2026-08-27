@@ -20,6 +20,11 @@
     <uses-feature
         android:name="oculus.software.handtracking"
         android:required="false" />
+    <!-- Horizon OS only exposes XR_FB_passthrough to an app that asks for it here; without
+         this the extension is simply absent from the instance extension list. -->
+    <uses-feature
+        android:name="com.oculus.feature.PASSTHROUGH"
+        android:required="false" />
 
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
