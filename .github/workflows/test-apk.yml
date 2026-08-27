@@ -35,6 +35,15 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      # A fresh runner generates a new debug keystore every run, which makes every APK
+      # signed with a different key and forces an uninstall before each test install.
+      # Caching it keeps the signature stable so `adb install -r` works.
+      - name: Cache debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+
       - name: Assemble debug
         run: ./gradlew --no-daemon assembleDebug
 
