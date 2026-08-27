@@ -34,6 +34,8 @@ class XrGoggleSession
         BUTTON_PASSTHROUGH = 1,
         BUTTON_RECORD     = 2,
         BUTTON_LOCK_MODE  = 3,
+        BUTTON_RAISE      = 4,
+        BUTTON_LOWER      = 5,
     };
 
     XrGoggleSession()  = default;
@@ -65,6 +67,7 @@ class XrGoggleSession
     void setVideoResolution(int width, int height);
     void setQuadDistance(float meters);
     void setQuadWidth(float meters);
+    void setQuadHeightOffset(float meters);
     void setPassthrough(bool enabled);
     void setSharpening(bool enabled);
     void setHeadLocked(bool enabled);
@@ -75,6 +78,7 @@ class XrGoggleSession
 
     float quadDistance() const { return mQuadDistance; }
     float quadWidth() const { return mQuadWidth; }
+    float quadHeightOffset() const { return mQuadHeightOffset; }
     bool  headLocked() const { return mHeadLocked; }
     bool  passthroughEnabled() const { return mPassthroughWanted; }
 
@@ -132,6 +136,8 @@ class XrGoggleSession
     XrAction    mActionLockMode     = XR_NULL_HANDLE;
     XrAction    mActionSizeStick    = XR_NULL_HANDLE;
     XrAction    mActionPlaceStick   = XR_NULL_HANDLE;
+    XrAction    mActionRaise        = XR_NULL_HANDLE;
+    XrAction    mActionLower        = XR_NULL_HANDLE;
     XrAction    mActionHaptic       = XR_NULL_HANDLE;
 
     // --- EGL ----------------------------------------------------------------------
@@ -158,6 +164,7 @@ class XrGoggleSession
     bool                     mHasPassthrough    = false;
     bool                     mHasHandInteraction = false;
     bool                     mHasImageLayout     = false;
+    bool                     mHasMicrogestures   = false;
     bool                     mHasLayerSettings = false;
     bool                     mHasRefreshRate   = false;
 
@@ -173,6 +180,7 @@ class XrGoggleSession
     int                mSwapchainHeight = 1080;
     std::atomic<float> mQuadDistance{1.6f};
     std::atomic<float> mQuadWidth{2.2f};
+    std::atomic<float> mQuadHeightOffset{0.0f};
     std::atomic<bool>  mHeadLocked{true};
     std::atomic<bool>  mPassthroughWanted{false};
     std::atomic<bool>  mSharpening{true};

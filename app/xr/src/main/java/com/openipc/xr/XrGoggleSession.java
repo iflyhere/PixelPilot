@@ -29,6 +29,8 @@ public final class XrGoggleSession {
     public static final int BUTTON_PASSTHROUGH = 1;
     public static final int BUTTON_RECORD = 2;
     public static final int BUTTON_LOCK_MODE = 3;
+    public static final int BUTTON_RAISE = 4;
+    public static final int BUTTON_LOWER = 5;
 
     private static final String TAG = "pixelpilot-xr";
 
@@ -208,6 +210,14 @@ public final class XrGoggleSession {
         if (handle != 0) nativeSetQuadWidth(handle, meters);
     }
 
+    public void setQuadHeightOffset(float meters) {
+        if (handle != 0) nativeSetQuadHeightOffset(handle, meters);
+    }
+
+    public float quadHeightOffset() {
+        return handle != 0 ? nativeGetQuadHeightOffset(handle) : 0f;
+    }
+
     public void setPassthrough(boolean enabled) {
         if (handle != 0) nativeSetPassthrough(handle, enabled);
     }
@@ -282,6 +292,10 @@ public final class XrGoggleSession {
     private static native void nativeSetQuadDistance(long handle, float meters);
 
     private static native void nativeSetQuadWidth(long handle, float meters);
+
+    private static native void nativeSetQuadHeightOffset(long handle, float meters);
+
+    private static native float nativeGetQuadHeightOffset(long handle);
 
     private static native void nativeSetPassthrough(long handle, boolean enabled);
 

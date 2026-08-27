@@ -64,6 +64,7 @@ public class XrVideoActivity extends AppCompatActivity
     static final String PREF_REFRESH_HZ = "xr_refresh_hz";
     static final String PREF_QUAD_WIDTH = "xr_quad_width";
     static final String PREF_QUAD_DISTANCE = "xr_quad_distance";
+    static final String PREF_QUAD_HEIGHT = "xr_quad_height";
     static final String PREF_LAST_VIDEO_W = "xr_last_video_width";
     static final String PREF_LAST_VIDEO_H = "xr_last_video_height";
 
@@ -145,6 +146,7 @@ public class XrVideoActivity extends AppCompatActivity
         xr.setSharpening(prefs.getBoolean(PREF_SHARPENING, true));
         xr.setQuadWidth(prefs.getFloat(PREF_QUAD_WIDTH, 2.2f));
         xr.setQuadDistance(prefs.getFloat(PREF_QUAD_DISTANCE, 1.6f));
+        xr.setQuadHeightOffset(prefs.getFloat(PREF_QUAD_HEIGHT, 0f));
     }
 
     @Override
@@ -291,6 +293,10 @@ public class XrVideoActivity extends AppCompatActivity
             case XrGoggleSession.BUTTON_RECORD:
                 toggleDvr();
                 break;
+            case XrGoggleSession.BUTTON_RAISE:
+            case XrGoggleSession.BUTTON_LOWER:
+                prefs().edit().putFloat(PREF_QUAD_HEIGHT, xr.quadHeightOffset()).apply();
+                break;
             default:
                 break;
         }
@@ -326,6 +332,7 @@ public class XrVideoActivity extends AppCompatActivity
         prefs().edit()
                 .putFloat(PREF_QUAD_WIDTH, xr.quadWidth())
                 .putFloat(PREF_QUAD_DISTANCE, xr.quadDistance())
+                .putFloat(PREF_QUAD_HEIGHT, xr.quadHeightOffset())
                 .putBoolean(PREF_HEAD_LOCKED, xr.isHeadLocked())
                 .putBoolean(PREF_PASSTHROUGH, xr.isPassthroughEnabled())
                 .apply();

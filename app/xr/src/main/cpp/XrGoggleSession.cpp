@@ -23,6 +23,10 @@ constexpr float kMinDistance     = 0.4f;
 constexpr float kMaxDistance     = 8.0f;
 constexpr float kMinWidth        = 0.4f;
 constexpr float kMaxWidth        = 12.0f;
+constexpr float kMaxHeightOffset = 1.5f;
+// One nudge, about 1.8 degrees at the default distance - small enough to fine-tune.
+constexpr float kHeightStep      = 0.05f;
+constexpr float kHeightPerSec    = 0.7f;
 
 float clampf(float v, float lo, float hi)
 {
@@ -339,19 +343,25 @@ bool XrGoggleSession::createInstance(JNIEnv* env, jobject activity)
     mHasHandInteraction = extensionSupported(XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
     // Needed to correct the origin of an Android-produced image, see renderFrame().
     mHasImageLayout = extensionSupported(XR_FB_COMPOSITION_LAYER_IMAGE_LAYOUT_EXTENSION_NAME);
+    // Thumb swipes along the index finger: a discrete control that does not occupy the
+    // hand, so pinch and grasp stay free for the flight actions.
+    mHasMicrogestures = mHasHandInteraction &&
+                        extensionSupported(XR_META_HAND_TRACKING_MICROGESTURES_EXTENSION_NAME);
     if (mHasPassthrough) enabled.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
     if (mHasLayerSettings) enabled.push_back(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
     if (mHasRefreshRate) enabled.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     if (mHasHandInteraction) enabled.push_back(XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
     if (mHasImageLayout) enabled.push_back(XR_FB_COMPOSITION_LAYER_IMAGE_LAYOUT_EXTENSION_NAME);
+    if (mHasMicrogestures) enabled.push_back(XR_META_HAND_TRACKING_MICROGESTURES_EXTENSION_NAME);
     LOGI(
         "optional extensions: passthrough=%d layerSettings=%d refreshRate=%d handInteraction=%d "
-        "imageLayout=%d",
+        "imageLayout=%d microgestures=%d",
         (int) mHasPassthrough,
         (int) mHasLayerSettings,
         (int) mHasRefreshRate,
         (int) mHasHandInteraction,
-        (int) mHasImageLayout);
+        (int) mHasImageLayout,
+        (int) mHasMicrogestures);
 
     JavaVM* vm = nullptr;
     env->GetJavaVM(&vm);
@@ -649,6 +659,8 @@ bool XrGoggleSession::createActions()
     mActionPassthrough = boolAction("passthrough", "Toggle passthrough");
     mActionRecord      = boolAction("record", "Toggle recording");
     mActionLockMode    = boolAction("lock_mode", "Toggle head lock");
+    mActionRaise       = boolAction("raise", "Move the screen up");
+    mActionLower       = boolAction("lower", "Move the screen down");
 
     XrActionCreateInfo stick{XR_TYPE_ACTION_CREATE_INFO};
     stick.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
@@ -674,7 +686,8 @@ bool XrGoggleSession::createActions()
         return false;
     }
 
-    // Touch controller: A/B live on the right hand, X/Y on the left.
+    // Touch controller: A/B live on the right hand, X/Y on the left. The left stick moves
+    // the panel (up/down and nearer/farther), the right stick sizes it.
     const XrActionSuggestedBinding touchBindings[] = {
         {mActionRecenter, path("/user/hand/right/input/a/click")},
         {mActionPassthrough, path("/user/hand/right/input/b/click")},
@@ -716,17 +729,39 @@ bool XrGoggleSession::createActions()
     // not to trigger each other.
     if (mHasHandInteraction)
     {
-        const XrActionSuggestedBinding handBindings[] = {
+        std::vector<XrActionSuggestedBinding> handBindings = {
             {mActionRecenter, path("/user/hand/right/input/pinch_ext/value")},
             {mActionPassthrough, path("/user/hand/right/input/grasp_ext/value")},
             {mActionRecord, path("/user/hand/left/input/pinch_ext/value")},
             {mActionLockMode, path("/user/hand/left/input/grasp_ext/value")},
         };
+        // Thumb swipes along the index finger, for nudging the panel up and down without
+        // spending pinch or grasp on it.
+        const size_t withoutMicrogestures = handBindings.size();
+        if (mHasMicrogestures)
+        {
+            handBindings.push_back(
+                {mActionRaise, path("/user/hand/right/input/swipe_forward_meta")});
+            handBindings.push_back(
+                {mActionLower, path("/user/hand/right/input/swipe_backward_meta")});
+        }
+
         XrInteractionProfileSuggestedBinding hands{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
         hands.interactionProfile = path("/interaction_profiles/ext/hand_interaction_ext");
-        hands.suggestedBindings  = handBindings;
-        hands.countSuggestedBindings = (uint32_t) (sizeof(handBindings) / sizeof(handBindings[0]));
-        const XrResult r = xrSuggestInteractionProfileBindings(mInstance, &hands);
+        hands.suggestedBindings  = handBindings.data();
+        hands.countSuggestedBindings = (uint32_t) handBindings.size();
+        XrResult r = xrSuggestInteractionProfileBindings(mInstance, &hands);
+        if (XR_FAILED(r) && handBindings.size() != withoutMicrogestures)
+        {
+            // Suggestions are atomic per profile, so one bad path would cost the working
+            // pinch/grasp bindings too. Drop the microgestures and keep those.
+            char name[XR_MAX_RESULT_STRING_SIZE] = {0};
+            xrResultToString(mInstance, r, name);
+            LOGW("microgesture bindings rejected (%s), retrying without them", name);
+            mHasMicrogestures            = false;
+            hands.countSuggestedBindings = (uint32_t) withoutMicrogestures;
+            r                            = xrSuggestInteractionProfileBindings(mInstance, &hands);
+        }
         if (XR_FAILED(r))
         {
             char name[XR_MAX_RESULT_STRING_SIZE] = {0};
@@ -735,7 +770,8 @@ bool XrGoggleSession::createActions()
         }
         else
         {
-            LOGI("hand interaction bindings suggested (pinch/grasp)");
+            LOGI("hand interaction bindings suggested (pinch/grasp%s)",
+                 mHasMicrogestures ? " + microgesture height" : "");
         }
     }
 
@@ -806,6 +842,11 @@ void XrGoggleSession::setQuadDistance(float meters)
 void XrGoggleSession::setQuadWidth(float meters)
 {
     mQuadWidth = clampf(meters, kMinWidth, kMaxWidth);
+}
+
+void XrGoggleSession::setQuadHeightOffset(float meters)
+{
+    mQuadHeightOffset = clampf(meters, -kMaxHeightOffset, kMaxHeightOffset);
 }
 
 void XrGoggleSession::setPassthrough(bool enabled)
@@ -1054,6 +1095,8 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
         {mActionPassthrough, BUTTON_PASSTHROUGH},
         {mActionRecord, BUTTON_RECORD},
         {mActionLockMode, BUTTON_LOCK_MODE},
+        {mActionRaise, BUTTON_RAISE},
+        {mActionLower, BUTTON_LOWER},
     };
 
     for (const auto& b : buttons)
@@ -1079,6 +1122,14 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
                 case BUTTON_LOCK_MODE:
                     setHeadLocked(!mHeadLocked.load());
                     requestHaptic(0.4f, 30);
+                    break;
+                case BUTTON_RAISE:
+                    setQuadHeightOffset(mQuadHeightOffset.load() + kHeightStep);
+                    requestHaptic(0.25f, 20);
+                    break;
+                case BUTTON_LOWER:
+                    setQuadHeightOffset(mQuadHeightOffset.load() - kHeightStep);
+                    requestHaptic(0.25f, 20);
                     break;
                 default:
                     break;
@@ -1114,10 +1165,16 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
         stickState = XrActionStateVector2f{XR_TYPE_ACTION_STATE_VECTOR2F};
         if (XR_SUCCEEDED(xrGetActionStateVector2f(mSession, &get, &stickState)) && stickState.isActive)
         {
+            // Left stick moves the panel: up/down raises it, left/right pulls it in and out.
             const float y = stickState.currentState.y;
             if (std::fabs(y) > kStickDeadzone)
             {
-                setQuadDistance(mQuadDistance.load() - y * kDistancePerSec * dt);
+                setQuadHeightOffset(mQuadHeightOffset.load() + y * kHeightPerSec * dt);
+            }
+            const float x = stickState.currentState.x;
+            if (std::fabs(x) > kStickDeadzone)
+            {
+                setQuadDistance(mQuadDistance.load() + x * kDistancePerSec * dt);
             }
         }
     }
@@ -1210,13 +1267,16 @@ void XrGoggleSession::renderFrame(JNIEnv* env, jobject listener)
     quad.subImage.imageRect.extent =
         XrExtent2Di{vw > 0 && vw <= mSwapchainWidth ? vw : mSwapchainWidth,
                     vh > 0 && vh <= mSwapchainHeight ? vh : mSwapchainHeight};
+    const float heightOffset = mQuadHeightOffset.load();
     if (headLocked)
     {
-        quad.pose = XrPosef{{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -mQuadDistance.load()}};
+        quad.pose =
+            XrPosef{{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, heightOffset, -mQuadDistance.load()}};
     }
     else
     {
         quad.pose = mAnchorPose;
+        quad.pose.position.y += heightOffset;
     }
     quad.size = XrExtent2Df{widthM, widthM * aspect};
 

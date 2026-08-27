@@ -119,6 +119,20 @@ JNI_METHOD(void, nativeSetQuadWidth)(JNIEnv* env, jclass clazz, jlong handle, jf
     native(handle)->setQuadWidth(meters);
 }
 
+JNI_METHOD(void, nativeSetQuadHeightOffset)(JNIEnv* env, jclass clazz, jlong handle, jfloat meters)
+{
+    (void) env;
+    (void) clazz;
+    native(handle)->setQuadHeightOffset(meters);
+}
+
+JNI_METHOD(jfloat, nativeGetQuadHeightOffset)(JNIEnv* env, jclass clazz, jlong handle)
+{
+    (void) env;
+    (void) clazz;
+    return native(handle)->quadHeightOffset();
+}
+
 JNI_METHOD(void, nativeSetPassthrough)(JNIEnv* env, jclass clazz, jlong handle, jboolean enabled)
 {
     (void) env;
