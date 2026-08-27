@@ -52,6 +52,8 @@ public class VideoPlayer implements IVideoParamsChanged {
 
     public static native void nativeSetUdpForwarding(long nativeInstance, String ip, int port, boolean enabled);
 
+    public static native void nativeSetLowLatency(long nativeInstance, boolean enabled);
+
     public static native void nativeStartDvr(long nativeInstance, int fd, int fmp4_enabled);
 
     public static native void nativeStopDvr(long nativeInstance);
@@ -124,6 +126,14 @@ public class VideoPlayer implements IVideoParamsChanged {
 
     public boolean isRunning() {
         return timer != null;
+    }
+
+    /**
+     * Enable/disable the low latency + realtime priority MediaCodec keys.
+     * Takes effect the next time the decoder is configured.
+     */
+    public void setLowLatency(boolean enabled) {
+        nativeSetLowLatency(nativeVideoPlayer, enabled);
     }
 
     public void setUdpForwarding(String ip, int port, boolean enabled) {
