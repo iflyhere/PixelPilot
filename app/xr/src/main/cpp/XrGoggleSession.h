@@ -96,6 +96,7 @@ class XrGoggleSession
     void renderFrame(JNIEnv* env, jobject listener);
     void syncActions(JNIEnv* env, jobject listener);
     void applyPendingHaptic();
+    void applyPassthroughState();
     void applyPendingRefreshRate();
     void recenterAt(XrTime time);
 

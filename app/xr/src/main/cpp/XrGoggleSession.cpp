@@ -644,6 +644,7 @@ void XrGoggleSession::runLoop(JNIEnv* env, jobject listener)
 
         applyPendingRefreshRate();
         syncActions(env, listener);
+        applyPassthroughState();
         renderFrame(env, listener);
     }
 
@@ -686,18 +687,6 @@ void XrGoggleSession::pollEvents(JNIEnv* env, jobject listener, bool* exitLoop)
                     if (check(xrBeginSession(mSession, &begin), "xrBeginSession"))
                     {
                         mSessionRunning = true;
-                        if (mHasPassthrough && mXrPassthroughStartFB != nullptr &&
-                            !mPassthroughRunning)
-                        {
-                            if (XR_SUCCEEDED(mXrPassthroughStartFB(mPassthrough)))
-                            {
-                                mPassthroughRunning = true;
-                                if (mXrPassthroughLayerResumeFB != nullptr)
-                                {
-                                    mXrPassthroughLayerResumeFB(mPassthroughLayer);
-                                }
-                            }
-                        }
                     }
                 }
                 else if (mSessionState == XR_SESSION_STATE_STOPPING)
@@ -763,6 +752,45 @@ void XrGoggleSession::applyPendingRefreshRate()
         LOGW("xrRequestDisplayRefreshRateFB(%.1f) failed", wanted);
     }
     mAppliedRefreshRate = wanted;
+}
+
+// Passthrough keeps the cameras and reconstruction running, so only pay for it while it
+// is on screen.
+void XrGoggleSession::applyPassthroughState()
+{
+    if (!mHasPassthrough || mPassthrough == XR_NULL_HANDLE) return;
+    const bool wanted = mPassthroughWanted.load();
+    if (wanted == mPassthroughRunning) return;
+
+    if (wanted)
+    {
+        if (mXrPassthroughStartFB == nullptr) return;
+        if (!XR_SUCCEEDED(mXrPassthroughStartFB(mPassthrough)))
+        {
+            LOGW("xrPassthroughStartFB failed");
+            mPassthroughWanted = false;
+            return;
+        }
+        if (mXrPassthroughLayerResumeFB != nullptr)
+        {
+            mXrPassthroughLayerResumeFB(mPassthroughLayer);
+        }
+        mPassthroughRunning = true;
+        LOGI("passthrough started");
+    }
+    else
+    {
+        if (mXrPassthroughLayerPauseFB != nullptr)
+        {
+            mXrPassthroughLayerPauseFB(mPassthroughLayer);
+        }
+        if (mXrPassthroughPauseFB != nullptr)
+        {
+            mXrPassthroughPauseFB(mPassthrough);
+        }
+        mPassthroughRunning = false;
+        LOGI("passthrough paused");
+    }
 }
 
 void XrGoggleSession::applyPendingHaptic()
