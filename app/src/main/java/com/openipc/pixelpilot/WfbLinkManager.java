@@ -171,7 +171,7 @@ public class WfbLinkManager extends BroadcastReceiver {
         if (activeWifiAdapters.isEmpty()) {
             status.showLinkMessage("No compatible wifi adapter found.");
 
-            String wifi = VideoActivity.wirelessInfo();
+            String wifi = VideoActivity.wirelessInfo(context);
             if (wifi != null) {
                 status.showLocalStreamHint("udp://" + wifi + ":5600");
             }
