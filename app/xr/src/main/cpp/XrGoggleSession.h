@@ -107,6 +107,7 @@ class XrGoggleSession
     void syncActions(JNIEnv* env, jobject listener);
     void applyPendingHaptic();
     void applyPassthroughState();
+    void logInteractionProfiles();
     void applyPendingRefreshRate();
     void recenterAt(XrTime time);
 
@@ -134,8 +135,9 @@ class XrGoggleSession
     XrAction    mActionPassthrough  = XR_NULL_HANDLE;
     XrAction    mActionRecord       = XR_NULL_HANDLE;
     XrAction    mActionLockMode     = XR_NULL_HANDLE;
-    XrAction    mActionSizeStick    = XR_NULL_HANDLE;
-    XrAction    mActionPlaceStick   = XR_NULL_HANDLE;
+    XrAction    mActionStick        = XR_NULL_HANDLE;
+    XrAction    mActionNearer       = XR_NULL_HANDLE;
+    XrAction    mActionFarther      = XR_NULL_HANDLE;
     XrAction    mActionRaise        = XR_NULL_HANDLE;
     XrAction    mActionLower        = XR_NULL_HANDLE;
     XrAction    mActionHaptic       = XR_NULL_HANDLE;
@@ -159,12 +161,14 @@ class XrGoggleSession
     PFN_xrPassthroughLayerSetStyleFB       mXrPassthroughLayerSetStyleFB       = nullptr;
     PFN_xrEnumerateDisplayRefreshRatesFB   mXrEnumerateDisplayRefreshRatesFB   = nullptr;
     PFN_xrRequestDisplayRefreshRateFB      mXrRequestDisplayRefreshRateFB      = nullptr;
+    PFN_xrResumeSimultaneousHandsAndControllersTrackingMETA mXrResumeSimultaneous = nullptr;
 
     std::vector<std::string> mAvailableExtensions;
     bool                     mHasPassthrough    = false;
     bool                     mHasHandInteraction = false;
     bool                     mHasImageLayout     = false;
     bool                     mHasMicrogestures   = false;
+    bool                     mHasSimultaneous    = false;
     bool                     mHasLayerSettings = false;
     bool                     mHasRefreshRate   = false;
 

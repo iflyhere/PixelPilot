@@ -17,6 +17,7 @@
 namespace
 {
 constexpr float kStickDeadzone   = 0.30f;
+constexpr float kTriggerDeadzone = 0.15f;
 constexpr float kDistancePerSec  = 0.9f;   // meters per second of full stick deflection
 constexpr float kWidthPerSec     = 1.4f;
 constexpr float kMinDistance     = 0.4f;
@@ -347,21 +348,28 @@ bool XrGoggleSession::createInstance(JNIEnv* env, jobject activity)
     // hand, so pinch and grasp stay free for the flight actions.
     mHasMicrogestures = mHasHandInteraction &&
                         extensionSupported(XR_META_HAND_TRACKING_MICROGESTURES_EXTENSION_NAME);
+    // Without this only one interaction profile is live at a time: with hands tracked the
+    // controller bindings never fire, which looks exactly like "the stick is broken".
+    mHasSimultaneous =
+        extensionSupported(XR_META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME);
     if (mHasPassthrough) enabled.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
     if (mHasLayerSettings) enabled.push_back(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
     if (mHasRefreshRate) enabled.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     if (mHasHandInteraction) enabled.push_back(XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
     if (mHasImageLayout) enabled.push_back(XR_FB_COMPOSITION_LAYER_IMAGE_LAYOUT_EXTENSION_NAME);
     if (mHasMicrogestures) enabled.push_back(XR_META_HAND_TRACKING_MICROGESTURES_EXTENSION_NAME);
+    if (mHasSimultaneous)
+        enabled.push_back(XR_META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME);
     LOGI(
         "optional extensions: passthrough=%d layerSettings=%d refreshRate=%d handInteraction=%d "
-        "imageLayout=%d microgestures=%d",
+        "imageLayout=%d microgestures=%d simultaneousHandsControllers=%d",
         (int) mHasPassthrough,
         (int) mHasLayerSettings,
         (int) mHasRefreshRate,
         (int) mHasHandInteraction,
         (int) mHasImageLayout,
-        (int) mHasMicrogestures);
+        (int) mHasMicrogestures,
+        (int) mHasSimultaneous);
 
     JavaVM* vm = nullptr;
     env->GetJavaVM(&vm);
@@ -422,6 +430,13 @@ bool XrGoggleSession::createInstance(JNIEnv* env, jobject activity)
                               (PFN_xrVoidFunction*) &mXrPassthroughLayerSetStyleFB);
         mHasPassthrough = mXrCreatePassthroughFB != nullptr && mXrCreatePassthroughLayerFB != nullptr &&
                           mXrPassthroughStartFB != nullptr;
+    }
+    if (mHasSimultaneous)
+    {
+        xrGetInstanceProcAddr(mInstance,
+                              "xrResumeSimultaneousHandsAndControllersTrackingMETA",
+                              (PFN_xrVoidFunction*) &mXrResumeSimultaneous);
+        mHasSimultaneous = mXrResumeSimultaneous != nullptr;
     }
     if (mHasRefreshRate)
     {
@@ -664,15 +679,25 @@ bool XrGoggleSession::createActions()
 
     XrActionCreateInfo stick{XR_TYPE_ACTION_CREATE_INFO};
     stick.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
-    std::strncpy(stick.actionName, "size", XR_MAX_ACTION_NAME_SIZE - 1);
-    std::strncpy(stick.localizedActionName, "Screen size", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
-    if (!check(xrCreateAction(mActionSet, &stick, &mActionSizeStick), "xrCreateAction(size)"))
+    std::strncpy(stick.actionName, "place", XR_MAX_ACTION_NAME_SIZE - 1);
+    std::strncpy(stick.localizedActionName, "Move the screen", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+    if (!check(xrCreateAction(mActionSet, &stick, &mActionStick), "xrCreateAction(place)"))
     {
         return false;
     }
-    std::strncpy(stick.actionName, "place", XR_MAX_ACTION_NAME_SIZE - 1);
-    std::strncpy(stick.localizedActionName, "Screen distance", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
-    if (!check(xrCreateAction(mActionSet, &stick, &mActionPlaceStick), "xrCreateAction(place)"))
+
+    // Analog, so the trigger and grip pull the panel in and push it out at a rate.
+    XrActionCreateInfo axis{XR_TYPE_ACTION_CREATE_INFO};
+    axis.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+    std::strncpy(axis.actionName, "nearer", XR_MAX_ACTION_NAME_SIZE - 1);
+    std::strncpy(axis.localizedActionName, "Pull the screen closer", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+    if (!check(xrCreateAction(mActionSet, &axis, &mActionNearer), "xrCreateAction(nearer)"))
+    {
+        return false;
+    }
+    std::strncpy(axis.actionName, "farther", XR_MAX_ACTION_NAME_SIZE - 1);
+    std::strncpy(axis.localizedActionName, "Push the screen away", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+    if (!check(xrCreateAction(mActionSet, &axis, &mActionFarther), "xrCreateAction(farther)"))
     {
         return false;
     }
@@ -686,15 +711,33 @@ bool XrGoggleSession::createActions()
         return false;
     }
 
-    // Touch controller: A/B live on the right hand, X/Y on the left. The left stick moves
-    // the panel (up/down and nearer/farther), the right stick sizes it.
+    // Mirrored left and right, so a single controller in either hand is enough. A/B and
+    // X/Y sit in the same places on their respective controllers, so binding both to the
+    // same action gives the same thumb positions whichever one you picked up.
+    //
+    //   thumbstick up/down     screen up/down
+    //   thumbstick left/right  screen smaller/bigger
+    //   trigger                pull the screen closer
+    //   grip                   push the screen away
+    //   A / X (lower button)   recenter
+    //   B / Y (upper button)   toggle passthrough
+    //   thumbstick click       toggle recording
+    //
+    // Head lock stays on a hand gesture and in the flat settings menu - it is set once,
+    // not adjusted in flight, and there is no button left that exists on both controllers.
     const XrActionSuggestedBinding touchBindings[] = {
         {mActionRecenter, path("/user/hand/right/input/a/click")},
+        {mActionRecenter, path("/user/hand/left/input/x/click")},
         {mActionPassthrough, path("/user/hand/right/input/b/click")},
-        {mActionRecord, path("/user/hand/left/input/x/click")},
-        {mActionLockMode, path("/user/hand/left/input/y/click")},
-        {mActionSizeStick, path("/user/hand/right/input/thumbstick")},
-        {mActionPlaceStick, path("/user/hand/left/input/thumbstick")},
+        {mActionPassthrough, path("/user/hand/left/input/y/click")},
+        {mActionRecord, path("/user/hand/right/input/thumbstick/click")},
+        {mActionRecord, path("/user/hand/left/input/thumbstick/click")},
+        {mActionStick, path("/user/hand/right/input/thumbstick")},
+        {mActionStick, path("/user/hand/left/input/thumbstick")},
+        {mActionNearer, path("/user/hand/right/input/trigger/value")},
+        {mActionNearer, path("/user/hand/left/input/trigger/value")},
+        {mActionFarther, path("/user/hand/right/input/squeeze/value")},
+        {mActionFarther, path("/user/hand/left/input/squeeze/value")},
         {mActionHaptic, path("/user/hand/left/output/haptic")},
         {mActionHaptic, path("/user/hand/right/output/haptic")},
     };
@@ -950,6 +993,20 @@ void XrGoggleSession::pollEvents(JNIEnv* env, jobject listener, bool* exitLoop)
                     if (check(xrBeginSession(mSession, &begin), "xrBeginSession"))
                     {
                         mSessionRunning = true;
+                        if (mHasSimultaneous)
+                        {
+                            XrSimultaneousHandsAndControllersTrackingResumeInfoMETA resume{
+                                XR_TYPE_SIMULTANEOUS_HANDS_AND_CONTROLLERS_TRACKING_RESUME_INFO_META};
+                            if (XR_SUCCEEDED(mXrResumeSimultaneous(mSession, &resume)))
+                            {
+                                LOGI("hands and controllers tracked simultaneously");
+                            }
+                            else
+                            {
+                                LOGW("xrResumeSimultaneousHandsAndControllersTrackingMETA failed");
+                            }
+                        }
+                        logInteractionProfiles();
                     }
                 }
                 else if (mSessionState == XR_SESSION_STATE_STOPPING)
@@ -972,6 +1029,12 @@ void XrGoggleSession::pollEvents(JNIEnv* env, jobject listener, bool* exitLoop)
                 *exitLoop       = true;
                 break;
             }
+            case XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED:
+            {
+                // The only way to see which of the suggested profiles is actually live.
+                logInteractionProfiles();
+                break;
+            }
             case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
             {
                 // The runtime recentered underneath us; re-anchor on the next frame.
@@ -980,6 +1043,30 @@ void XrGoggleSession::pollEvents(JNIEnv* env, jobject listener, bool* exitLoop)
             }
             default:
                 break;
+        }
+    }
+}
+
+void XrGoggleSession::logInteractionProfiles()
+{
+    for (const char* hand : {"/user/hand/left", "/user/hand/right"})
+    {
+        XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
+        if (XR_FAILED(xrGetCurrentInteractionProfile(mSession, path(hand), &state)))
+        {
+            continue;
+        }
+        if (state.interactionProfile == XR_NULL_PATH)
+        {
+            LOGI("%s: no interaction profile active", hand);
+            continue;
+        }
+        char     name[XR_MAX_PATH_LENGTH] = {0};
+        uint32_t written                   = 0;
+        if (XR_SUCCEEDED(
+                xrPathToString(mInstance, state.interactionProfile, sizeof(name), &written, name)))
+        {
+            LOGI("%s: %s", hand, name);
         }
     }
 }
@@ -1145,27 +1232,13 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
     const float dt = 1.0f / 72.0f;  // good enough for a manual adjustment ramp
 
     XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
-    XrActionStateVector2f stickState{XR_TYPE_ACTION_STATE_VECTOR2F};
-    if (mActionSizeStick != XR_NULL_HANDLE)
+    if (mActionStick != XR_NULL_HANDLE)
     {
-        get.action = mActionSizeStick;
-        stickState = XrActionStateVector2f{XR_TYPE_ACTION_STATE_VECTOR2F};
+        get.action = mActionStick;
+        XrActionStateVector2f stickState{XR_TYPE_ACTION_STATE_VECTOR2F};
         if (XR_SUCCEEDED(xrGetActionStateVector2f(mSession, &get, &stickState)) && stickState.isActive)
         {
-            const float y = stickState.currentState.y;
-            if (std::fabs(y) > kStickDeadzone)
-            {
-                setQuadWidth(mQuadWidth.load() + y * kWidthPerSec * dt);
-            }
-        }
-    }
-    if (mActionPlaceStick != XR_NULL_HANDLE)
-    {
-        get.action = mActionPlaceStick;
-        stickState = XrActionStateVector2f{XR_TYPE_ACTION_STATE_VECTOR2F};
-        if (XR_SUCCEEDED(xrGetActionStateVector2f(mSession, &get, &stickState)) && stickState.isActive)
-        {
-            // Left stick moves the panel: up/down raises it, left/right pulls it in and out.
+            // Either thumbstick: up/down raises the panel, left/right resizes it.
             const float y = stickState.currentState.y;
             if (std::fabs(y) > kStickDeadzone)
             {
@@ -1174,9 +1247,28 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
             const float x = stickState.currentState.x;
             if (std::fabs(x) > kStickDeadzone)
             {
-                setQuadDistance(mQuadDistance.load() + x * kDistancePerSec * dt);
+                setQuadWidth(mQuadWidth.load() + x * kWidthPerSec * dt);
             }
         }
+    }
+
+    // Trigger pulls the panel in, grip pushes it out, both analog.
+    float distanceRate = 0.0f;
+    for (int i = 0; i < 2; ++i)
+    {
+        const XrAction action = (i == 0) ? mActionNearer : mActionFarther;
+        if (action == XR_NULL_HANDLE) continue;
+        get.action = action;
+        XrActionStateFloat axisState{XR_TYPE_ACTION_STATE_FLOAT};
+        if (XR_SUCCEEDED(xrGetActionStateFloat(mSession, &get, &axisState)) && axisState.isActive &&
+            axisState.currentState > kTriggerDeadzone)
+        {
+            distanceRate += (i == 0 ? -1.0f : 1.0f) * axisState.currentState;
+        }
+    }
+    if (std::fabs(distanceRate) > 0.0f)
+    {
+        setQuadDistance(mQuadDistance.load() + distanceRate * kDistancePerSec * dt);
     }
 }
 
