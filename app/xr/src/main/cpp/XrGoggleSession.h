@@ -155,7 +155,8 @@ class XrGoggleSession
     PFN_xrRequestDisplayRefreshRateFB      mXrRequestDisplayRefreshRateFB      = nullptr;
 
     std::vector<std::string> mAvailableExtensions;
-    bool                     mHasPassthrough   = false;
+    bool                     mHasPassthrough    = false;
+    bool                     mHasHandInteraction = false;
     bool                     mHasLayerSettings = false;
     bool                     mHasRefreshRate   = false;
 

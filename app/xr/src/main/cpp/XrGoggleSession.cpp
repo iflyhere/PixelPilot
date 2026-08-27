@@ -335,13 +335,17 @@ bool XrGoggleSession::createInstance(JNIEnv* env, jobject activity)
     mHasPassthrough   = extensionSupported(XR_FB_PASSTHROUGH_EXTENSION_NAME);
     mHasLayerSettings = extensionSupported(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
     mHasRefreshRate   = extensionSupported(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+    // Lets the same actions be driven by a pinch when flying without controllers.
+    mHasHandInteraction = extensionSupported(XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
     if (mHasPassthrough) enabled.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
     if (mHasLayerSettings) enabled.push_back(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
     if (mHasRefreshRate) enabled.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
-    LOGI("optional extensions: passthrough=%d layerSettings=%d refreshRate=%d",
+    if (mHasHandInteraction) enabled.push_back(XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
+    LOGI("optional extensions: passthrough=%d layerSettings=%d refreshRate=%d handInteraction=%d",
          (int) mHasPassthrough,
          (int) mHasLayerSettings,
-         (int) mHasRefreshRate);
+         (int) mHasRefreshRate,
+         (int) mHasHandInteraction);
 
     JavaVM* vm = nullptr;
     env->GetJavaVM(&vm);
@@ -528,9 +532,10 @@ bool XrGoggleSession::createSpaces()
 /*
  * MediaCodec is the producer for an Android surface swapchain, so the image description
  * fields are not really ours to choose. The extension documents them as ignored, but Meta's
- * runtime validates them: passing the "obvious" 1s gets XR_ERROR_VALIDATION_FAILURE on a
- * Quest 3. Rather than hardcode one guess, try the plausible shapes and log which one the
- * runtime accepted.
+ * runtime validates them and wants them zeroed: passing the "obvious" 1s gets
+ * XR_ERROR_VALIDATION_FAILURE on a Quest 3 (Horizon OS, Android 14), while all-zero is
+ * accepted. The zeroed shape is therefore first; the rest stay as a fallback for a runtime
+ * that wants something else, and the accepted one is logged.
  */
 bool XrGoggleSession::createSwapchain(JNIEnv* env)
 {
@@ -697,6 +702,35 @@ bool XrGoggleSession::createActions()
     if (XR_FAILED(xrSuggestInteractionProfileBindings(mInstance, &simple)))
     {
         LOGW("simple controller bindings rejected");
+    }
+
+    // Hand tracking, for flying without controllers. A boolean action may be bound to a
+    // float source - the runtime does the thresholding - so the same four actions work.
+    // Pinch is index-to-thumb, grasp is a whole-hand squeeze, which are far enough apart
+    // not to trigger each other.
+    if (mHasHandInteraction)
+    {
+        const XrActionSuggestedBinding handBindings[] = {
+            {mActionRecenter, path("/user/hand/right/input/pinch_ext/value")},
+            {mActionPassthrough, path("/user/hand/right/input/grasp_ext/value")},
+            {mActionRecord, path("/user/hand/left/input/pinch_ext/value")},
+            {mActionLockMode, path("/user/hand/left/input/grasp_ext/value")},
+        };
+        XrInteractionProfileSuggestedBinding hands{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+        hands.interactionProfile = path("/interaction_profiles/ext/hand_interaction_ext");
+        hands.suggestedBindings  = handBindings;
+        hands.countSuggestedBindings = (uint32_t) (sizeof(handBindings) / sizeof(handBindings[0]));
+        const XrResult r = xrSuggestInteractionProfileBindings(mInstance, &hands);
+        if (XR_FAILED(r))
+        {
+            char name[XR_MAX_RESULT_STRING_SIZE] = {0};
+            xrResultToString(mInstance, r, name);
+            LOGW("hand interaction bindings rejected: %s", name);
+        }
+        else
+        {
+            LOGI("hand interaction bindings suggested (pinch/grasp)");
+        }
     }
 
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
