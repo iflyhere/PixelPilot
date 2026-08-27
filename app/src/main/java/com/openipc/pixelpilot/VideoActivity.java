@@ -1021,35 +1021,12 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     void initDefaultOptions() {
-        SharedPreferences prefs = getSharedPreferences("general", MODE_PRIVATE);
-        boolean adaptiveEnabled = prefs.getBoolean("adaptive_link_enabled", true);
-        int adaptiveTxPower = prefs.getInt("adaptive_tx_power", 20);
-        wfbLink.nativeSetAdaptiveLinkEnabled(adaptiveEnabled);
-        wfbLink.nativeSetTxPower(adaptiveTxPower);
-        boolean fecEnabled = prefs.getBoolean("custom_fec_enabled", true);
-        wfbLink.nativeSetUseFec(fecEnabled ? 1 : 0);
-
-        // LDPC and STBC default options
-        boolean ldpcEnabled = prefs.getBoolean("custom_ldpc_enabled", true);
-        wfbLink.nativeSetUseLdpc(ldpcEnabled ? 1 : 0);
-
-        boolean stbcEnabled = prefs.getBoolean("custom_stbc_enabled", true);
-        wfbLink.nativeSetUseStbc(stbcEnabled ? 1 : 0);
-
-        setFecThresholdsFromPrefs();
+        WfbOptions.applyDefaults(this, wfbLink);
     }
 
     // Read FEC thresholds from prefs and call native method to apply
     private void setFecThresholdsFromPrefs() {
-        SharedPreferences prefs = getSharedPreferences("general", MODE_PRIVATE);
-        int lostTo5 = prefs.getInt("fec_lost_to_5", 2);
-        int recTo4 = prefs.getInt("fec_recovered_to_4", 30);
-        int recTo3 = prefs.getInt("fec_recovered_to_3", 24);
-        int recTo2 = prefs.getInt("fec_recovered_to_2", 14);
-        int recTo1 = prefs.getInt("fec_recovered_to_1", 8);
-        if (wfbLink != null) {
-            wfbLink.setFecThresholds(lostTo5, recTo4, recTo3, recTo2, recTo1);
-        }
+        WfbOptions.applyFecThresholds(this, wfbLink);
     }
 
     /**
@@ -1506,36 +1483,15 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     public void setDefaultGsKey() {
-        if (getGsKey().length > 0) {
-            Log.d(TAG, "gs.key already saved in preferences.");
-            return;
-        }
-        try {
-            Log.d(TAG, "Importing default gs.key...");
-            InputStream inputStream = getAssets().open("gs.key");
-            setGsKey(inputStream);
-            inputStream.close();
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to import default gs.key");
-        }
+        GsKey.importDefaultIfMissing(this);
     }
 
     public byte[] getGsKey() {
-        String pref = getSharedPreferences("general", Context.MODE_PRIVATE).getString("gs.key", "");
-        return Base64.decode(pref, Base64.DEFAULT);
+        return GsKey.get(this);
     }
 
     public void setGsKey(InputStream inputStream) throws IOException {
-        ByteArrayOutputStream result = new ByteArrayOutputStream();
-        byte[] buffer = new byte[1024];
-        int length;
-        while ((length = inputStream.read(buffer)) != -1) {
-            result.write(buffer, 0, length);
-        }
-        SharedPreferences prefs = getSharedPreferences("general", Context.MODE_PRIVATE);
-        SharedPreferences.Editor editor = prefs.edit();
-        editor.putString("gs.key", Base64.encodeToString(result.toByteArray(), Base64.DEFAULT));
-        editor.apply();
+        GsKey.set(this, inputStream);
     }
 
     public boolean getDvrMP4() {
@@ -1802,24 +1758,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     private void copyGSKey() {
-        File file = new File(getApplicationContext().getFilesDir(), "gs.key");
-        OutputStream out = null;
-        try {
-            byte[] keyBytes = getGsKey();
-            Log.d(TAG, "Using gs.key:" + bytesToHex(keyBytes) + "; Copying to" + file.getAbsolutePath());
-            out = new FileOutputStream(file);
-            out.write(keyBytes, 0, keyBytes.length);
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to copy asset", e);
-        } finally {
-            if (out != null) {
-                try {
-                    out.close();
-                } catch (IOException e) {
-                    // NOOP
-                }
-            }
-        }
+        GsKey.writeToFilesDir(this);
     }
 
     private void showLoginCredentialsDialog() {

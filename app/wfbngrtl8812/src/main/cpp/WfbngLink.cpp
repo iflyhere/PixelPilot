@@ -56,6 +56,7 @@ WfbngLink::WfbngLink(JNIEnv *env, jobject context)
 }
 
 void WfbngLink::initAgg() {
+  try {
     std::string client_addr = "127.0.0.1";
     uint64_t epoch = 0;
 
@@ -81,6 +82,19 @@ void WfbngLink::initAgg() {
 
     udp_aggregator =
         std::make_unique<AggregatorUDPv4>(client_addr, udp_client_port, keyPath, epoch, udp_channel_id_f, 0);
+  } catch (const std::exception &e) {
+    // The aggregators open the key in their constructor. Letting that escape a JNI call
+    // aborts the whole process, which is what a missing gs.key used to do.
+    __android_log_print(ANDROID_LOG_ERROR,
+                        TAG,
+                        "initAgg failed (%s) - check gs.key at %s. Link stays down until "
+                        "the key is refreshed.",
+                        e.what(),
+                        keyPath);
+    video_aggregator.reset();
+    mavlink_aggregator.reset();
+    udp_aggregator.reset();
+  }
 }
 
 int WfbngLink::run(JNIEnv *env, jobject context, jint wifiChannel, jint bw, jint fd) {

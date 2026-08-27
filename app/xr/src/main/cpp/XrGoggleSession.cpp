@@ -309,6 +309,13 @@ bool XrGoggleSession::createInstance(JNIEnv* env, jobject activity)
     {
         mAvailableExtensions.emplace_back(p.extensionName);
     }
+    // Worth the log lines: it is the only way to see from a bug report what the runtime on
+    // a given headset actually offers.
+    LOGI("runtime exposes %zu instance extensions:", mAvailableExtensions.size());
+    for (const auto& name : mAvailableExtensions)
+    {
+        LOGI("  %s", name.c_str());
+    }
 
     // Without these three there is no immersive video path at all.
     const char* required[] = {

@@ -117,8 +117,16 @@ public class XrVideoActivity extends AppCompatActivity
         videoPlayer.setIVideoParamsChanged(this);
         videoPlayer.setLowLatency(VideoActivity.getLowLatencySetting(this));
 
+        // The native aggregators open files/gs.key in their constructor and throw if it
+        // is not there, so this has to happen before WfbNgLink is created.
+        if (!GsKey.ensure(this)) {
+            failToFlat("no usable gs.key");
+            return;
+        }
         wfbLink = new WfbNgLink(this);
         wfbLink.SetWfbNGStatsChanged(this);
+        // Not read by the native side on its own: adaptive link, TX power, FEC/LDPC/STBC.
+        WfbOptions.applyDefaults(this, wfbLink);
         wfbLinkManager = new WfbLinkManager(this, this, wfbLink);
 
         xr = new XrGoggleSession(this, this);
