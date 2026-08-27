@@ -12,6 +12,14 @@
     <uses-feature
         android:name="android.hardware.vr.headtracking"
         android:required="false" />
+    <!-- Horizon OS treats an app declared with the VR category as controller-required
+         unless it advertises hand tracking, and blocks the launch with
+         RequiresControllersLaunchInterceptor when the controllers are off. A pilot has a
+         radio in their hands, not Touch controllers, and the video path does not need them
+         at all - so declare it and let the app start either way. -->
+    <uses-feature
+        android:name="oculus.software.handtracking"
+        android:required="false" />
 
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
