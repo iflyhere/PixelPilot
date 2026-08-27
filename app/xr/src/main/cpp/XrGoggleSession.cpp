@@ -337,15 +337,21 @@ bool XrGoggleSession::createInstance(JNIEnv* env, jobject activity)
     mHasRefreshRate   = extensionSupported(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     // Lets the same actions be driven by a pinch when flying without controllers.
     mHasHandInteraction = extensionSupported(XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
+    // Needed to correct the origin of an Android-produced image, see renderFrame().
+    mHasImageLayout = extensionSupported(XR_FB_COMPOSITION_LAYER_IMAGE_LAYOUT_EXTENSION_NAME);
     if (mHasPassthrough) enabled.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
     if (mHasLayerSettings) enabled.push_back(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
     if (mHasRefreshRate) enabled.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     if (mHasHandInteraction) enabled.push_back(XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
-    LOGI("optional extensions: passthrough=%d layerSettings=%d refreshRate=%d handInteraction=%d",
-         (int) mHasPassthrough,
-         (int) mHasLayerSettings,
-         (int) mHasRefreshRate,
-         (int) mHasHandInteraction);
+    if (mHasImageLayout) enabled.push_back(XR_FB_COMPOSITION_LAYER_IMAGE_LAYOUT_EXTENSION_NAME);
+    LOGI(
+        "optional extensions: passthrough=%d layerSettings=%d refreshRate=%d handInteraction=%d "
+        "imageLayout=%d",
+        (int) mHasPassthrough,
+        (int) mHasLayerSettings,
+        (int) mHasRefreshRate,
+        (int) mHasHandInteraction,
+        (int) mHasImageLayout);
 
     JavaVM* vm = nullptr;
     env->GetJavaVM(&vm);
@@ -1172,8 +1178,27 @@ void XrGoggleSession::renderFrame(JNIEnv* env, jobject listener)
     XrCompositionLayerSettingsFB layerSettings{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
     layerSettings.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
 
+    // Everything that produces into an Android Surface - MediaCodec, and Canvas for the
+    // status screen - has its origin at the top left, while the compositor samples a
+    // swapchain image from the bottom left. Without this the picture is upside down.
+    XrCompositionLayerImageLayoutFB imageLayout{XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB};
+    imageLayout.flags = XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
+
+    // Chain whatever applies onto the quad.
+    const void* layerChain = nullptr;
+    if (mHasLayerSettings && mSharpening.load())
+    {
+        layerSettings.next = layerChain;
+        layerChain         = &layerSettings;
+    }
+    if (mHasImageLayout)
+    {
+        imageLayout.next = const_cast<void*>(layerChain);
+        layerChain       = &imageLayout;
+    }
+
     XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-    quad.next         = (mHasLayerSettings && mSharpening.load()) ? &layerSettings : nullptr;
+    quad.next         = layerChain;
     quad.layerFlags   = 0;  // opaque: the video has to cover passthrough behind it
     quad.space        = headLocked ? mViewSpace : mLocalSpace;
     quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;

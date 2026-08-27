@@ -157,6 +157,7 @@ class XrGoggleSession
     std::vector<std::string> mAvailableExtensions;
     bool                     mHasPassthrough    = false;
     bool                     mHasHandInteraction = false;
+    bool                     mHasImageLayout     = false;
     bool                     mHasLayerSettings = false;
     bool                     mHasRefreshRate   = false;
 
