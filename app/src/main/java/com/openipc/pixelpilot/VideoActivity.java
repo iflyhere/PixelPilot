@@ -165,6 +165,11 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
                 Context.MODE_PRIVATE).getInt("wifi-channel", 161);
     }
 
+    public static boolean getLowLatencySetting(Context context) {
+        return context.getSharedPreferences("general",
+                Context.MODE_PRIVATE).getBoolean("low_latency_decoder", true);
+    }
+
     public static int getBandwidth(Context context) {
         return context.getSharedPreferences("general",
                 Context.MODE_PRIVATE).getInt("bandwidth", 20);
@@ -353,6 +358,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     private void initializeVideoPlayers() {
         videoPlayer = new VideoPlayer(this);
         videoPlayer.setIVideoParamsChanged(this);
+        videoPlayer.setLowLatency(getLowLatencySetting(this));
 
         isVRMode = getVRSetting();
 
@@ -587,6 +593,9 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         // Bandwidth submenu
         setupBandwidthSubMenu(popup);
 
+        // Video submenu
+        setupVideoSubMenu(popup);
+
         // OSD submenu
         setupOSDSubMenu(popup);
 
@@ -669,6 +678,32 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
                 return true;
             });
         }
+    }
+
+    /**
+     * Submenu for video decoder options.
+     * "Low latency" sets the MediaCodec low-latency and realtime-priority keys. It is on
+     * by default; decoders that misbehave with those keys can be put back on the stock
+     * pipeline here.
+     */
+    private void setupVideoSubMenu(PopupMenu popup) {
+        SubMenu videoMenu = popup.getMenu().addSubMenu("Video");
+
+        MenuItem lowLatencyItem = videoMenu.add("Low latency");
+        lowLatencyItem.setCheckable(true);
+        lowLatencyItem.setChecked(getLowLatencySetting(this));
+        lowLatencyItem.setOnMenuItemClickListener(item -> {
+            boolean enabled = !item.isChecked();
+            item.setChecked(enabled);
+            getSharedPreferences("general", MODE_PRIVATE).edit()
+                    .putBoolean("low_latency_decoder", enabled).apply();
+            videoPlayer.setLowLatency(enabled);
+            Toast.makeText(this, "Low latency " + (enabled ? "enabled" : "disabled")
+                    + ", applies on next video start.", Toast.LENGTH_SHORT).show();
+            item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
+            item.setActionView(new View(this));
+            return false;
+        });
     }
 
     /**

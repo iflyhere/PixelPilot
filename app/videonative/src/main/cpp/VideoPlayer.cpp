@@ -316,6 +316,16 @@ extern "C"
         }
     }
 
+    JNI_METHOD(void, nativeSetLowLatency)
+    (JNIEnv* env, jclass jclass1, jlong nativeInstance, jboolean enabled)
+    {
+        VideoPlayer* p = native(nativeInstance);
+        if (p)
+        {
+            p->setLowLatency(enabled);
+        }
+    }
+
     JNI_METHOD(void, nativeSetVideoSurface)
     (JNIEnv* env, jclass jclass1, jlong videoPlayerN, jobject surface, jint index)
     {
