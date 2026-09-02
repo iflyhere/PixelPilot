@@ -177,7 +177,10 @@ public class WfbNgLink implements WfbNGStatsChanged {
      * join there is a five second ANR waiting to happen, and it did: a driver thread that
      * does not come back froze the UI. Wait, but give up and say so.
      */
-    private static final long JOIN_TIMEOUT_MS = 1500;
+    // StopRxLoop() only breaks the receive loop; the thread then still has to stop the TX
+    // frame, the adaptive link, power the chip down and release the USB interface. Too
+    // short a wait here and the next owner cannot claim the interface yet.
+    private static final long JOIN_TIMEOUT_MS = 3000;
 
     private static void joinBounded(Thread t, String what) throws InterruptedException {
         if (t == null) {

@@ -87,6 +87,12 @@ public class XrVideoActivity extends AppCompatActivity
     private WfbLinkManager wfbLinkManager;
     private TextView statusView;
 
+    // The flat activity may still be releasing the USB interface when we get here, so the
+    // adapter is retried for a while rather than given up on after one attempt.
+    private static final int LINK_RETRY_INTERVAL_MS = 700;
+    private static final int LINK_RETRY_LIMIT = 20;
+
+    private int linkRetries;
     private boolean xrStarting;
     private boolean linkStarted;
     private Surface xrSurface;
@@ -238,10 +244,21 @@ public class XrVideoActivity extends AppCompatActivity
             // refreshAdapters() has asked for permission; the broadcast brings us back.
             return;
         }
+
+        // Going immersive does not depend on the link, and the pilot is better off seeing the
+        // status screen with a reason than a flat activity that says nothing.
         if (!xrStarting) {
             xrStarting = true;
             statusView.setText(R.string.xr_entering);
             xr.start();
+        }
+
+        if (!wfbLinkManager.hasActiveAdapter() && linkRetries < LINK_RETRY_LIMIT) {
+            linkRetries++;
+            Log.i(TAG, "adapter not up yet, retry " + linkRetries + "/" + LINK_RETRY_LIMIT);
+            handler.postDelayed(this::tryBringUpLink, LINK_RETRY_INTERVAL_MS);
+        } else if (wfbLinkManager.hasActiveAdapter()) {
+            linkRetries = 0;
         }
     }
 
@@ -276,7 +293,8 @@ public class XrVideoActivity extends AppCompatActivity
         applyRefreshRatePreference();
         statusView.setVisibility(View.GONE);
         linkStarted = true;
-        wfbLinkManager.startAdapters();
+        // Not startAdapters(): tryBringUpLink() -> refreshAdapters() already owns bringing the
+        // adapter up, and it retries. Two paths racing for one dongle is what broke this.
     }
 
     private void applyRefreshRatePreference() {

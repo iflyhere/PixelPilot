@@ -1748,6 +1748,9 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
 
     @Override
     public void showLinkMessage(String message) {
+        // Also to the log: this used to only reach the overlay, so a bug report had no
+        // record of what the app actually said about the link.
+        Log.i(TAG, "link: " + message);
         runOnUiThread(() -> {
             binding.tvMessage.setVisibility(View.VISIBLE);
             binding.tvMessage.setText(message);

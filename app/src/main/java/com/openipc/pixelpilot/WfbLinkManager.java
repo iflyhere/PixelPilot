@@ -204,6 +204,11 @@ public class WfbLinkManager extends BroadcastReceiver {
         }
     }
 
+    /** True when at least one adapter is up, so a caller can retry instead of guessing. */
+    public synchronized boolean hasActiveAdapter() {
+        return !activeWifiAdapters.isEmpty();
+    }
+
     public synchronized void stopAdapters() {
         try {
             wfbLink.stopAll();
