@@ -1,0 +1,31 @@
+# Fork-only helper: build and run the native unit tests under
+# app/videonative/src/main/cpp/tests. These are plain host gtest targets - no Android
+# toolchain, no NDK, no submodules - so they cost about a minute.
+# Run with: gh workflow run native-tests.yml --ref master -f target_ref=<branch>
+name: Native tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: 'Branch or SHA to test'
+        required: true
+        default: 'master'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+
+      - name: Configure
+        run: cmake -S app/videonative/src/main/cpp/tests -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Run
+        run: ctest --test-dir build --output-on-failure
