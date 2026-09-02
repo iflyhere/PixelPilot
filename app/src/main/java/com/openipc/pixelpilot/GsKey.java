@@ -68,7 +68,7 @@ public final class GsKey {
         File file = new File(context.getApplicationContext().getFilesDir(), FILE_NAME);
         try (OutputStream out = new FileOutputStream(file)) {
             out.write(keyBytes, 0, keyBytes.length);
-            Log.d(TAG, "Wrote gs.key to " + file.getAbsolutePath());
+            Log.d(TAG, "Wrote gs.key (" + keyBytes.length + " bytes) to " + file.getAbsolutePath());
             return true;
         } catch (IOException e) {
             Log.e(TAG, "Failed to write gs.key", e);

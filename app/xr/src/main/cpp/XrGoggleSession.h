@@ -107,6 +107,8 @@ class XrGoggleSession
     void syncActions(JNIEnv* env, jobject listener);
     void applyPendingHaptic();
     void applyPassthroughState();
+    // Returns true on the frame a held action should fire, once per press.
+    bool heldActionFired(XrAction action, int slot, XrTime now);
     void logInteractionProfiles();
     void applyPendingRefreshRate();
     void recenterAt(XrTime time);
@@ -138,6 +140,8 @@ class XrGoggleSession
     XrAction    mActionStick        = XR_NULL_HANDLE;
     XrAction    mActionNearer       = XR_NULL_HANDLE;
     XrAction    mActionFarther      = XR_NULL_HANDLE;
+    XrAction    mActionHandRecenter = XR_NULL_HANDLE;
+    XrAction    mActionHandPassthrough = XR_NULL_HANDLE;
     XrAction    mActionRaise        = XR_NULL_HANDLE;
     XrAction    mActionLower        = XR_NULL_HANDLE;
     XrAction    mActionHaptic       = XR_NULL_HANDLE;
@@ -173,6 +177,7 @@ class XrGoggleSession
     bool                     mHasRefreshRate   = false;
 
     // --- state --------------------------------------------------------------------
+    XrTime            mLastPredictedDisplayTime = 0;
     XrSessionState    mSessionState  = XR_SESSION_STATE_UNKNOWN;
     bool              mSessionRunning = false;
     std::atomic<bool> mStopRequested{false};
@@ -200,6 +205,14 @@ class XrGoggleSession
 
     std::string        mManifestDir;
     std::string        mRuntimeLibrary;
+    // Press bookkeeping for the hand actions, which need a deliberate hold.
+    struct HeldButton
+    {
+        bool   down     = false;
+        bool   fired    = false;
+        XrTime downTime = 0;
+    };
+    HeldButton         mHeld[2];
     std::vector<float> mRefreshRates;
     std::mutex         mErrorMutex;
     std::string        mLastError;

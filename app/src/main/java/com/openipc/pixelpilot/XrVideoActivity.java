@@ -68,6 +68,17 @@ public class XrVideoActivity extends AppCompatActivity
     static final String PREF_LAST_VIDEO_W = "xr_last_video_width";
     static final String PREF_LAST_VIDEO_H = "xr_last_video_height";
 
+    /**
+     * Whether an immersive session owns the link right now. The USB_DEVICE_ATTACHED filter
+     * lives on VideoActivity, so replugging the adapter would otherwise start the flat
+     * activity alongside a running immersive session.
+     */
+    private static volatile boolean active;
+
+    static boolean isActive() {
+        return active;
+    }
+
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private XrGoggleSession xr;
@@ -87,6 +98,8 @@ public class XrVideoActivity extends AppCompatActivity
     // Link quality haptics
     private long lastHapticAt;
     private boolean linkWasBad;
+    private volatile WfbNGStats lastStats;
+    private long lastStatsLogAt;
 
     private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
         @Override
@@ -104,6 +117,7 @@ public class XrVideoActivity extends AppCompatActivity
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        active = true;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         // Only shown while still flat: USB permission, errors, "waiting for adapter".
@@ -165,6 +179,7 @@ public class XrVideoActivity extends AppCompatActivity
 
     @Override
     protected void onDestroy() {
+        active = false;
         persistGeometry();
         try {
             unregisterReceiver(usbReceiver);
@@ -408,6 +423,20 @@ public class XrVideoActivity extends AppCompatActivity
             canvas.drawText(status, cx, y, body);
             y += h / 20f;
         }
+        // The link counters answer the first question a pilot has when the screen stays
+        // empty: is anything arriving at all?
+        WfbNGStats stats = lastStats;
+        if (stats != null) {
+            canvas.drawText("wfb packets " + stats.count_p_all
+                            + "   ok " + stats.count_p_dec_ok
+                            + "   lost " + stats.count_p_lost
+                            + "   err " + stats.count_p_dec_err,
+                    cx, y, body);
+            y += h / 20f;
+        } else {
+            canvas.drawText("no wfb statistics yet", cx, y, body);
+            y += h / 20f;
+        }
         canvas.drawText("channel " + VideoActivity.getChannel(this)
                         + " @ " + VideoActivity.getBandwidth(this) + " MHz",
                 cx, y, body);
@@ -493,6 +522,21 @@ public class XrVideoActivity extends AppCompatActivity
 
     @Override
     public void onWfbNgStatsChanged(WfbNGStats data) {
+        lastStats = data;
+        // Without this there is no way to tell "the adapter is dead" from "the link is fine
+        // but nothing decodes" while wearing the headset.
+        final long nowMs = System.currentTimeMillis();
+        if (nowMs - lastStatsLogAt > 2000) {
+            lastStatsLogAt = nowMs;
+            Log.i(TAG, "wfb: all=" + data.count_p_all
+                    + " decOk=" + data.count_p_dec_ok
+                    + " decErr=" + data.count_p_dec_err
+                    + " fecRec=" + data.count_p_fec_recovered
+                    + " lost=" + data.count_p_lost
+                    + " bad=" + data.count_p_bad
+                    + " rssi=" + data.avg_rssi
+                    + " videoSeen=" + videoSeen);
+        }
         if (xr == null || !linkStarted || data.count_p_all <= 0) {
             return;
         }

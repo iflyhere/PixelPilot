@@ -299,6 +299,16 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         Log.d(TAG, "lifecycle onCreate");
         super.onCreate(savedInstanceState);
 
+        // The USB_DEVICE_ATTACHED filter is on this activity, so replugging the adapter
+        // starts it even while the immersive activity owns the link. Two activities fighting
+        // over one adapter and one decoder means neither gets video, so step aside.
+        if (XrVideoActivity.isActive()
+                && UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(getIntent().getAction())) {
+            Log.i(TAG, "adapter attached while the immersive session is running, staying out of it");
+            finish();
+            return;
+        }
+
         // UI Setup
         initializeUI();
 

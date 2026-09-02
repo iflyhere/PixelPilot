@@ -18,6 +18,9 @@ namespace
 {
 constexpr float kStickDeadzone   = 0.30f;
 constexpr float kTriggerDeadzone = 0.15f;
+// A hand gesture has to be held this long before it counts. Grabbing a drone or a radio
+// squeezes the hand for a moment; deliberately holding a pinch does not happen by accident.
+constexpr int64_t kHandHoldNs    = 700LL * 1000 * 1000;
 constexpr float kDistancePerSec  = 0.9f;   // meters per second of full stick deflection
 constexpr float kWidthPerSec     = 1.4f;
 constexpr float kMinDistance     = 0.4f;
@@ -676,6 +679,10 @@ bool XrGoggleSession::createActions()
     mActionLockMode    = boolAction("lock_mode", "Toggle head lock");
     mActionRaise       = boolAction("raise", "Move the screen up");
     mActionLower       = boolAction("lower", "Move the screen down");
+    // Separate actions so the hold requirement applies to the hand only - a controller
+    // button should still act the moment it is pressed.
+    mActionHandRecenter    = boolAction("hand_recenter", "Recenter view (hold)");
+    mActionHandPassthrough = boolAction("hand_passthrough", "Toggle passthrough (hold)");
 
     XrActionCreateInfo stick{XR_TYPE_ACTION_CREATE_INFO};
     stick.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
@@ -772,11 +779,12 @@ bool XrGoggleSession::createActions()
     // not to trigger each other.
     if (mHasHandInteraction)
     {
+        // No grasp bindings: a whole-hand squeeze is what you do to pick up a drone, and
+        // having that flip passthrough mid-flight is worse than not having the shortcut.
+        // Pinch survives, but only when held - see heldActionFired().
         std::vector<XrActionSuggestedBinding> handBindings = {
-            {mActionRecenter, path("/user/hand/right/input/pinch_ext/value")},
-            {mActionPassthrough, path("/user/hand/right/input/grasp_ext/value")},
-            {mActionRecord, path("/user/hand/left/input/pinch_ext/value")},
-            {mActionLockMode, path("/user/hand/left/input/grasp_ext/value")},
+            {mActionHandRecenter, path("/user/hand/right/input/pinch_ext/value")},
+            {mActionHandPassthrough, path("/user/hand/left/input/pinch_ext/value")},
         };
         // Thumb swipes along the index finger, for nudging the panel up and down without
         // spending pinch or grasp on it.
@@ -813,7 +821,7 @@ bool XrGoggleSession::createActions()
         }
         else
         {
-            LOGI("hand interaction bindings suggested (pinch/grasp%s)",
+            LOGI("hand interaction bindings suggested (held pinch%s)",
                  mHasMicrogestures ? " + microgesture height" : "");
         }
     }
@@ -1047,6 +1055,42 @@ void XrGoggleSession::pollEvents(JNIEnv* env, jobject listener, bool* exitLoop)
     }
 }
 
+// A hand action fires once, after being held for kHandHoldNs. Anything shorter is treated
+// as an accident.
+bool XrGoggleSession::heldActionFired(XrAction action, int slot, XrTime now)
+{
+    if (action == XR_NULL_HANDLE) return false;
+    HeldButton& held = mHeld[slot];
+
+    XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
+    get.action = action;
+    XrActionStateBoolean state{XR_TYPE_ACTION_STATE_BOOLEAN};
+    if (XR_FAILED(xrGetActionStateBoolean(mSession, &get, &state)) || !state.isActive)
+    {
+        held = HeldButton{};
+        return false;
+    }
+
+    if (!state.currentState)
+    {
+        held = HeldButton{};
+        return false;
+    }
+    if (!held.down)
+    {
+        held.down     = true;
+        held.fired    = false;
+        held.downTime = now;
+        return false;
+    }
+    if (!held.fired && (now - held.downTime) >= kHandHoldNs)
+    {
+        held.fired = true;
+        return true;
+    }
+    return false;
+}
+
 void XrGoggleSession::logInteractionProfiles()
 {
     for (const char* hand : {"/user/hand/left", "/user/hand/right"})
@@ -1210,6 +1254,8 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
                     setHeadLocked(!mHeadLocked.load());
                     requestHaptic(0.4f, 30);
                     break;
+                // Recenter and passthrough are dispatched from the held-gesture path too, so
+                // they are handled where the press is detected rather than here.
                 case BUTTON_RAISE:
                     setQuadHeightOffset(mQuadHeightOffset.load() + kHeightStep);
                     requestHaptic(0.25f, 20);
@@ -1226,6 +1272,29 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
                 env->CallVoidMethod(listener, onButton, (jint) b.button);
                 if (env->ExceptionCheck()) env->ExceptionClear();
             }
+        }
+    }
+
+    // Hand gestures, which need a deliberate hold before they count.
+    const XrTime nowNs = mLastPredictedDisplayTime;
+    if (heldActionFired(mActionHandRecenter, 0, nowNs))
+    {
+        mRecenterRequested = true;
+        requestHaptic(0.5f, 60);
+        if (onButton != nullptr)
+        {
+            env->CallVoidMethod(listener, onButton, (jint) BUTTON_RECENTER);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+    }
+    if (heldActionFired(mActionHandPassthrough, 1, nowNs))
+    {
+        mPassthroughWanted = !mPassthroughWanted.load();
+        requestHaptic(0.5f, 60);
+        if (onButton != nullptr)
+        {
+            env->CallVoidMethod(listener, onButton, (jint) BUTTON_PASSTHROUGH);
+            if (env->ExceptionCheck()) env->ExceptionClear();
         }
     }
 
@@ -1305,6 +1374,8 @@ void XrGoggleSession::renderFrame(JNIEnv* env, jobject listener)
 
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
     if (XR_FAILED(xrBeginFrame(mSession, &beginInfo))) return;
+
+    mLastPredictedDisplayTime = frameState.predictedDisplayTime;
 
     applyPendingHaptic();
 
