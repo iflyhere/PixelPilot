@@ -30,6 +30,31 @@ public class WfbNgLink implements WfbNGStatsChanged {
         System.loadLibrary("WfbngRtl8812");
     }
 
+    /**
+     * Devices with a live RX loop anywhere in the process, keyed by device name.
+     *
+     * <p>Per-instance bookkeeping is not enough: each Activity owns its own WfbNgLink, so
+     * two of them both see an empty map and both claim the same dongle. Keyed on the thread
+     * so a claim left behind by a thread that died is simply ignored rather than locking the
+     * adapter out for good.
+     */
+    private static final Map<String, Thread> claimedDevices = new HashMap<>();
+
+    private static synchronized boolean claim(String deviceName, Thread t) {
+        Thread holder = claimedDevices.get(deviceName);
+        if (holder != null && holder.isAlive()) {
+            return false;
+        }
+        claimedDevices.put(deviceName, t);
+        return true;
+    }
+
+    private static synchronized void release(String deviceName, Thread t) {
+        if (claimedDevices.get(deviceName) == t) {
+            claimedDevices.remove(deviceName);
+        }
+    }
+
     private final long nativeWfbngLink;
     private final Timer timer;
     private final Context context;
@@ -93,6 +118,15 @@ public class WfbNgLink implements WfbNGStatsChanged {
     }
 
     public synchronized boolean start(int wifiChannel, int bandWidth, UsbDevice usbDevice) {
+        // A second RX loop on the same adapter means two libusb handles on one interface:
+        // neither gets usable video, the old thread is orphaned because linkThreads.put()
+        // overwrites its entry, and stopAll() then joins only the last one - which is how
+        // three live "wfb-001/002" threads and a hung main thread happen.
+        Thread existing = linkThreads.get(usbDevice);
+        if (existing != null && existing.isAlive()) {
+            Log.w(TAG, "wfb-ng already running on " + usbDevice.getDeviceName() + ", not starting a second");
+            return true;
+        }
         Log.d(TAG, "wfb-ng monitoring on " + usbDevice.getDeviceName() + " using wifi channel " + wifiChannel);
         UsbManager usbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
         // Returns null when the permission was revoked or the device disappeared between
@@ -108,12 +142,26 @@ public class WfbNgLink implements WfbNGStatsChanged {
             usbDeviceConnection.close();
             return false;
         }
-        Thread t = new Thread(() -> nativeRun(nativeWfbngLink, context, wifiChannel, bandWidth, fd));
+        final String deviceName = usbDevice.getDeviceName();
+        final Thread[] self = new Thread[1];
+        Thread t = new Thread(() -> {
+            try {
+                nativeRun(nativeWfbngLink, context, wifiChannel, bandWidth, fd);
+            } finally {
+                release(deviceName, self[0]);
+            }
+        });
+        self[0] = t;
         t.setName(threadNameFor(usbDevice));
+        if (!claim(deviceName, t)) {
+            Log.w(TAG, "another wfb-ng RX loop already owns " + deviceName + ", not starting a second");
+            usbDeviceConnection.close();
+            return false;
+        }
         linkThreads.put(usbDevice, t);
         linkConns.put(usbDevice, usbDeviceConnection);
         t.start();
-        Log.d(TAG, "wfb-ng thread on " + usbDevice.getDeviceName() + " started.");
+        Log.d(TAG, "wfb-ng thread on " + deviceName + " started.");
         return true;
     }
 
@@ -123,19 +171,36 @@ public class WfbNgLink implements WfbNGStatsChanged {
         return "wfb-" + (parts.length > 1 ? parts[1] : name);
     }
 
+    /**
+     * The RX loop is joined so the USB interface is released before anything reopens it, but
+     * these calls come from Activity lifecycle callbacks on the main thread. An unbounded
+     * join there is a five second ANR waiting to happen, and it did: a driver thread that
+     * does not come back froze the UI. Wait, but give up and say so.
+     */
+    private static final long JOIN_TIMEOUT_MS = 1500;
+
+    private static void joinBounded(Thread t, String what) throws InterruptedException {
+        if (t == null) {
+            return;
+        }
+        t.join(JOIN_TIMEOUT_MS);
+        if (t.isAlive()) {
+            Log.e(TAG, "wfb-ng thread on " + what + " did not stop within " + JOIN_TIMEOUT_MS
+                    + "ms, leaving it behind");
+        } else {
+            Log.d(TAG, "wfb-ng thread on " + what + " done.");
+        }
+    }
+
     public synchronized void stopAll() throws InterruptedException {
         for (Map.Entry<UsbDevice, UsbDeviceConnection> entry : linkConns.entrySet()) {
             nativeStop(nativeWfbngLink, context, entry.getValue().getFileDescriptor());
         }
         for (Map.Entry<UsbDevice, UsbDeviceConnection> entry : linkConns.entrySet()) {
-            Thread t = linkThreads.get(entry.getKey());
-            if (t != null) {
-                t.join();
-            }
+            joinBounded(linkThreads.get(entry.getKey()), entry.getKey().getDeviceName());
             // The connection holds a dup of the usbfs fd. Without close() every
             // attach/detach cycle leaks one, until the process runs out.
             entry.getValue().close();
-            Log.d(TAG, "wfb-ng thread on " + entry.getKey().getDeviceName() + " done.");
         }
         linkThreads.clear();
         linkConns.clear();
@@ -148,10 +213,7 @@ public class WfbNgLink implements WfbNGStatsChanged {
         }
         int fd = conn.getFileDescriptor();
         nativeStop(nativeWfbngLink, context, fd);
-        Thread t = linkThreads.get(dev);
-        if (t != null) {
-            t.join();
-        }
+        joinBounded(linkThreads.get(dev), dev.getDeviceName());
         linkThreads.remove(dev);
         linkConns.remove(dev);
         conn.close();

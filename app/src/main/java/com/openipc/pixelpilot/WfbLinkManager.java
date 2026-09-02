@@ -18,7 +18,10 @@ import java.util.Map;
 public class WfbLinkManager extends BroadcastReceiver {
     public static final String ACTION_USB_PERMISSION = "com.openipc.pixelpilot.USB_PERMISSION";
     private static final String TAG = "pixelpilot";
-    static Map<String, UsbDevice> activeWifiAdapters = new HashMap<>();
+    // Not static: it used to be, and with two activities each owning its own WfbNgLink
+    // that shared map let both of them decide the adapter still needed starting, so the
+    // same dongle ended up with several RX loops.
+    private final Map<String, UsbDevice> activeWifiAdapters = new HashMap<>();
     private final WfbNgLink wfbLink;
     private final LinkStatusView status;
     private final Context context;
