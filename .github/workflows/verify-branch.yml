@@ -19,6 +19,12 @@ jobs:
         with:
           ref: ${{ inputs.target_ref }}
           submodules: true
+          # Without this, checkout fetches submodules with --depth=1, which cannot check out
+          # a pinned commit that is no longer the tip of the submodule's default branch. It
+          # then leaves devourer incomplete and CMake fails with "Cannot find source file:
+          # devourer/src/HalmacCfgParam.cpp" - intermittently, depending on whether the pin
+          # still happens to be reachable.
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v3
