@@ -34,12 +34,6 @@
 #undef TAG
 #define TAG "pixelpilot"
 
-#define CRASH()                                                                                                        \
-    do {                                                                                                               \
-        int *i = 0;                                                                                                    \
-        *i = 42;                                                                                                       \
-    } while (0)
-
 std::string generate_random_string(size_t length) {
     const std::string characters = "abcdefghijklmnopqrstuvwxyz";
     std::random_device rd;
@@ -92,6 +86,7 @@ void WfbngLink::initAgg() {
 int WfbngLink::run(JNIEnv *env, jobject context, jint wifiChannel, jint bw, jint fd) {
     int r;
     libusb_context *ctx = NULL;
+    clear_stop_request(fd);
     txFrame = std::make_shared<TxFrame>();
 
     r = libusb_set_option(NULL, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
@@ -135,6 +130,14 @@ int WfbngLink::run(JNIEnv *env, jobject context, jint wifiChannel, jint bw, jint
     if (!rtl_devices.at(fd)) {
         libusb_exit(ctx);
         __android_log_print(ANDROID_LOG_ERROR, TAG, "CreateRtlDevice error");
+        return -1;
+    }
+
+    if (stop_requested(fd)) {
+        __android_log_print(ANDROID_LOG_WARN, TAG, "stop requested for fd=%d before bring-up, aborting", fd);
+        rtl_devices.erase(fd);
+        libusb_release_interface(dev_handle, 0);
+        libusb_exit(ctx);
         return -1;
     }
 
@@ -246,7 +249,12 @@ int WfbngLink::run(JNIEnv *env, jobject context, jint wifiChannel, jint bw, jint
 
         // Blocking RX loop on this thread; devourer pumps the libusb events
         // itself. Returns once StopRxLoop() is called.
-        current_device->StartRxLoop(packetProcessor);
+        if (stop_requested(fd)) {
+            __android_log_print(
+                ANDROID_LOG_WARN, TAG, "stop requested for fd=%d during bring-up, not entering the rx loop", fd);
+        } else {
+            current_device->StartRxLoop(packetProcessor);
+        }
     } catch (const std::runtime_error &error) {
         __android_log_print(ANDROID_LOG_ERROR, TAG, "runtime_error: %s", error.what());
         txFrame->stop();
@@ -282,9 +290,13 @@ int WfbngLink::run(JNIEnv *env, jobject context, jint wifiChannel, jint bw, jint
 }
 
 void WfbngLink::stop(JNIEnv *env, jobject context, jint fd) {
+    // Recorded first, and whether or not the device exists yet: run() may not have got as far
+    // as creating it, and StartRxLoop() would clear the flag set below anyway.
+    note_stop_requested(fd);
     if (rtl_devices.find(fd) == rtl_devices.end()) {
-        __android_log_print(ANDROID_LOG_ERROR, TAG, "rtl_devices.find(%d) == rtl_devices.end()", fd);
-        CRASH();
+        // Happens when the adapter was already gone by the time the stop arrived, e.g. it
+        // was unplugged or the hub re-enumerated it. Nothing left to stop.
+        __android_log_print(ANDROID_LOG_WARN, TAG, "stop: no rtl device for fd=%d, already gone", fd);
         return;
     }
     auto dev = rtl_devices.at(fd).get();
