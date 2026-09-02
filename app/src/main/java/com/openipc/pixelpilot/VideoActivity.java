@@ -133,6 +133,9 @@ public class VideoActivity extends LinkClientActivity
     // Which view the main video is rendered into. SurfaceView is the low latency
     // default; the TextureView is only used when object detection needs getBitmap().
     private boolean videoUsesTextureView = false;
+    // A Surface can become available before the service has bound - binding is async and the
+    // view hierarchy does not wait for it - so it is parked here until the link exists.
+    private final Surface[] pendingSurfaces = new Surface[2];
     private ConstraintLayout constraintLayout;
     private ConstraintSet constraintSet;
 
@@ -431,9 +434,7 @@ public class VideoActivity extends LinkClientActivity
         return new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder holder) {
-                if (link != null) {
-                    link.attachSurface(holder.getSurface(), index);
-                }
+                provideSurface(holder.getSurface(), index);
             }
 
             @Override
@@ -442,20 +443,30 @@ public class VideoActivity extends LinkClientActivity
 
             @Override
             public void surfaceDestroyed(SurfaceHolder holder) {
-                if (link != null) {
-                    link.detachSurface(index);
-                }
+                withdrawSurface(index);
             }
         };
+    }
+
+    private void provideSurface(Surface surface, int index) {
+        pendingSurfaces[index] = surface;
+        if (link != null) {
+            link.attachSurface(surface, index);
+        }
+    }
+
+    private void withdrawSurface(int index) {
+        pendingSurfaces[index] = null;
+        if (link != null) {
+            link.detachSurface(index);
+        }
     }
 
     private TextureView.SurfaceTextureListener surfaceTextureListener(final int index) {
         return new TextureView.SurfaceTextureListener() {
             @Override
             public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
-                if (link != null) {
-                    link.attachSurface(new Surface(texture), index);
-                }
+                provideSurface(new Surface(texture), index);
             }
 
             @Override
@@ -464,9 +475,7 @@ public class VideoActivity extends LinkClientActivity
 
             @Override
             public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
-                if (link != null) {
-                    link.detachSurface(index);
-                }
+                withdrawSurface(index);
                 return true;
             }
 
@@ -1627,6 +1636,12 @@ public class VideoActivity extends LinkClientActivity
 
     @Override
     protected void onLinkServiceConnected(LinkService service) {
+        // Whatever the view hierarchy produced while we were still binding.
+        for (int i = 0; i < pendingSurfaces.length; i++) {
+            if (pendingSurfaces[i] != null) {
+                service.attachSurface(pendingSurfaces[i], i);
+            }
+        }
         service.ensureAdapters();
         updateUdpForwardingState();
     }
