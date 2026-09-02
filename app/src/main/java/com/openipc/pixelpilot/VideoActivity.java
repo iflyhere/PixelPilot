@@ -134,6 +134,9 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     private Timer recordTimer = null;
     private int seconds = 0;
     private boolean isVRMode = false;
+    // Which view the main video is rendered into. SurfaceView is the low latency
+    // default; the TextureView is only used when object detection needs getBitmap().
+    private boolean videoUsesTextureView = false;
     private ConstraintLayout constraintLayout;
     private ConstraintSet constraintSet;
     private WfbNgLink wfbLink;
@@ -395,6 +398,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
      */
     private void setupVRVideoPlayers() {
         binding.mainVideo.setVisibility(View.GONE);
+        binding.mainVideoSurface.setVisibility(View.GONE);
         binding.surfaceViewLeft.getHolder().addCallback(videoPlayer.configure1(0));
         binding.surfaceViewRight.getHolder().addCallback(videoPlayer.configure1(1));
     }
@@ -405,7 +409,30 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     private void setupStandardVideoPlayer() {
         binding.surfaceViewRight.setVisibility(View.GONE);
         binding.surfaceViewLeft.setVisibility(View.GONE);
-        binding.mainVideo.setSurfaceTextureListener(videoPlayer.configureTextureView(0));
+
+        // Object detection reads frames back with TextureView.getBitmap(), which forces
+        // the video through the view hierarchy's GPU composition. Without it a
+        // SurfaceView is used so the video stays on a hardware overlay plane.
+        //
+        // The preference alone is not enough: setObjectDetectionEnabled() turns detection
+        // back off in onResume when the runtime or the selected model is missing, and returns
+        // before the renderer swap - which would leave the session on the TextureView with
+        // nothing reading from it. Both checks are cheap when od_enabled is false, and when
+        // it is true the runtime check only loads a library that is about to be used anyway.
+        videoUsesTextureView = getSharedPreferences("general", MODE_PRIVATE)
+                        .getBoolean("od_enabled", false)
+                && isObjectDetectionRuntimeSupported()
+                && isSelectedObjectDetectionModelAvailable();
+
+        if (videoUsesTextureView) {
+            binding.mainVideoSurface.setVisibility(View.GONE);
+            binding.mainVideo.setVisibility(View.VISIBLE);
+            binding.mainVideo.setSurfaceTextureListener(videoPlayer.configureTextureView(0));
+        } else {
+            binding.mainVideo.setVisibility(View.GONE);
+            binding.mainVideoSurface.setVisibility(View.VISIBLE);
+            binding.mainVideoSurface.getHolder().addCallback(videoPlayer.configure1(0));
+        }
     }
 
     // ----------------------------------------------------------------------------
@@ -1602,6 +1629,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         Log.d(TAG, "Set resolution: " + videoW + "x" + videoH);
 
         updateViewRatio(R.id.mainVideo, lastVideoW, lastVideoH);
+        updateViewRatio(R.id.mainVideoSurface, lastVideoW, lastVideoH);
         updateViewRatio(R.id.surfaceViewLeft, lastVideoW, lastVideoH);
         updateViewRatio(R.id.surfaceViewRight, lastVideoW, lastVideoH);
     }
@@ -2043,7 +2071,19 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         }
 
         isObjectDetectionEnabled = enabled;
-        prefs.edit().putBoolean("od_enabled", enabled).apply();
+        // commit(), not apply(): the restart below ends the process with System.exit()
+        // before an asynchronous write would be flushed, and the renderer picked on the
+        // next launch is read from exactly this value.
+        prefs.edit().putBoolean("od_enabled", enabled).commit();
+
+        // Enabling / disabling detection swaps the main video renderer. Handing the
+        // decoder a different surface at runtime would need the receiver lifecycle in
+        // VideoPlayer reworked, so restart instead - same as the VR mode toggle does.
+        if (!isVRMode && enabled != videoUsesTextureView) {
+            Toast.makeText(this, "Restarting to switch video renderer...", Toast.LENGTH_SHORT).show();
+            resetApp();
+            return;
+        }
 
         if (enabled) {
             binding.detectionOverlay.setVisibility(View.VISIBLE);
@@ -2064,6 +2104,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
 
     private void startObjectDetectionLoop() {
         if (isVRMode) return; // Standard mode only
+        if (!videoUsesTextureView) return; // getBitmap() needs the TextureView renderer
         if (objectDetectionExecutor == null) {
             objectDetectionExecutor = Executors.newSingleThreadExecutor();
         }
