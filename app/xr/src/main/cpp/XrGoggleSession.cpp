@@ -683,6 +683,7 @@ bool XrGoggleSession::createActions()
     // button should still act the moment it is pressed.
     mActionHandRecenter    = boolAction("hand_recenter", "Recenter view (hold)");
     mActionHandPassthrough = boolAction("hand_passthrough", "Toggle passthrough (hold)");
+    mActionExit            = boolAction("exit", "Leave VR");
 
     XrActionCreateInfo stick{XR_TYPE_ACTION_CREATE_INFO};
     stick.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
@@ -745,6 +746,7 @@ bool XrGoggleSession::createActions()
         {mActionNearer, path("/user/hand/left/input/trigger/value")},
         {mActionFarther, path("/user/hand/right/input/squeeze/value")},
         {mActionFarther, path("/user/hand/left/input/squeeze/value")},
+        {mActionExit, path("/user/hand/left/input/menu/click")},
         {mActionHaptic, path("/user/hand/left/output/haptic")},
         {mActionHaptic, path("/user/hand/right/output/haptic")},
     };
@@ -795,6 +797,7 @@ bool XrGoggleSession::createActions()
                 {mActionRaise, path("/user/hand/right/input/swipe_forward_meta")});
             handBindings.push_back(
                 {mActionLower, path("/user/hand/right/input/swipe_backward_meta")});
+            handBindings.push_back({mActionExit, path("/user/hand/right/input/swipe_left_meta")});
         }
 
         XrInteractionProfileSuggestedBinding hands{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
@@ -1228,6 +1231,7 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
         {mActionLockMode, BUTTON_LOCK_MODE},
         {mActionRaise, BUTTON_RAISE},
         {mActionLower, BUTTON_LOWER},
+        {mActionExit, BUTTON_EXIT},
     };
 
     for (const auto& b : buttons)
@@ -1263,6 +1267,10 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
                 case BUTTON_LOWER:
                     setQuadHeightOffset(mQuadHeightOffset.load() - kHeightStep);
                     requestHaptic(0.25f, 20);
+                    break;
+                case BUTTON_EXIT:
+                    // Handled on the Java side; just confirm it was registered.
+                    requestHaptic(0.6f, 80);
                     break;
                 default:
                     break;

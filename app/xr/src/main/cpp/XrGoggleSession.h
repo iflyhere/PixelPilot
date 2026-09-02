@@ -36,6 +36,7 @@ class XrGoggleSession
         BUTTON_LOCK_MODE  = 3,
         BUTTON_RAISE      = 4,
         BUTTON_LOWER      = 5,
+        BUTTON_EXIT       = 6,
     };
 
     XrGoggleSession()  = default;
@@ -144,6 +145,7 @@ class XrGoggleSession
     XrAction    mActionHandPassthrough = XR_NULL_HANDLE;
     XrAction    mActionRaise        = XR_NULL_HANDLE;
     XrAction    mActionLower        = XR_NULL_HANDLE;
+    XrAction    mActionExit         = XR_NULL_HANDLE;
     XrAction    mActionHaptic       = XR_NULL_HANDLE;
 
     // --- EGL ----------------------------------------------------------------------

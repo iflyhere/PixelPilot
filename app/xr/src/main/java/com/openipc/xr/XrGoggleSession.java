@@ -31,6 +31,7 @@ public final class XrGoggleSession {
     public static final int BUTTON_LOCK_MODE = 3;
     public static final int BUTTON_RAISE = 4;
     public static final int BUTTON_LOWER = 5;
+    public static final int BUTTON_EXIT = 6;
 
     private static final String TAG = "pixelpilot-xr";
 

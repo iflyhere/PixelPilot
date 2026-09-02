@@ -294,6 +294,9 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             case XrGoggleSession.BUTTON_RECORD:
                 toggleDvr();
                 break;
+            case XrGoggleSession.BUTTON_EXIT:
+                leaveVr();
+                break;
             case XrGoggleSession.BUTTON_RAISE:
             case XrGoggleSession.BUTTON_LOWER:
                 prefs().edit().putFloat(PREF_QUAD_HEIGHT, xr.quadHeightOffset()).apply();
@@ -311,6 +314,16 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         } else {
             finish();
         }
+    }
+
+    /**
+     * Back to the flat activity. Cheap now that the link lives in the service: the adapter
+     * stays open and video keeps running, only the presentation changes.
+     */
+    private void leaveVr() {
+        Log.i(TAG, "leaving immersive mode on request");
+        startActivity(new Intent(this, VideoActivity.class));
+        finish();
     }
 
     /** Immersive mode is not usable here - say why and go back to the flat activity. */
@@ -433,6 +446,14 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             y += h / 20f;
         }
         canvas.drawText(xr != null && xr.isHeadLocked() ? "head locked" : "world locked", cx, y, body);
+        y += h / 20f;
+
+        Paint hint = new Paint(body);
+        hint.setTextSize(h / 36f);
+        hint.setColor(Color.rgb(130, 140, 155));
+        canvas.drawText("A recenter    B passthrough    stick click record", cx, y, hint);
+        y += h / 26f;
+        canvas.drawText("menu button or thumb swipe left: back to flat mode", cx, y, hint);
     }
 
     // ------------------------------------------------------------------------------
