@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <fstream>
 #include <queue>
+#include <utility>
+#include <vector>
 #include "AudioDecoder.h"
 #include "BufferedPacketQueue.h"
 #include "UdpReceiver.h"
@@ -74,9 +76,18 @@ class VideoPlayer
     H26XParser          mParser;
     BufferedPacketQueue mBufferedPacketQueueVideo, mBufferedPacketQueueAudio;
 
+    // A NALU is a non-owning view onto the parser's buffer (see NALU.hpp), which is
+    // reused for the next packet. The DVR writer runs on its own thread, so what gets
+    // handed over has to own its bytes.
+    struct DvrNalu
+    {
+        std::vector<uint8_t> data;
+        bool                 is_h265 = false;
+    };
+
     // DVR attributes
     int                     dvr_fd;
-    std::queue<NALU>        naluQueue;
+    std::queue<DvrNalu>     naluQueue;
     std::mutex              mtx;
     std::condition_variable cv;
     bool                    stopFlag = false;
@@ -84,11 +95,11 @@ class VideoPlayer
     int                     dvr_mp4_fragmentation = 0;
     uint64_t                last_dvr_write        = 0;
 
-    void enqueueNALU(const NALU& nalu)
+    void enqueueNALU(DvrNalu&& nalu)
     {
         {
             std::lock_guard<std::mutex> lock(mtx);
-            naluQueue.push(nalu);
+            naluQueue.push(std::move(nalu));
         }
         cv.notify_one();
     }

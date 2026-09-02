@@ -61,16 +61,15 @@ void VideoPlayer::processQueue()
         }
         if (!naluQueue.empty())
         {
-            NALU nalu = naluQueue.front();
             if (framerate == 0)
             {
                 if (latestDecodingInfo.currentFPS <= 0)
                 {
                     continue;
                 }
+                const bool is_h265 = naluQueue.front().is_h265;
                 if (MP4E_STATUS_OK !=
-                    mp4_h26x_write_init(
-                        &mp4wr, mux, latestVideoRatio.width, latestVideoRatio.height, nalu.IS_H265_PACKET))
+                    mp4_h26x_write_init(&mp4wr, mux, latestVideoRatio.width, latestVideoRatio.height, is_h265))
                 {
                     __android_log_print(ANDROID_LOG_DEBUG, TAG, "error: mp4_h26x_write_init failed");
                 }
@@ -82,12 +81,13 @@ void VideoPlayer::processQueue()
                     framerate,
                     latestVideoRatio.width,
                     latestVideoRatio.height,
-                    nalu.IS_H265_PACKET);
+                    is_h265);
             }
+            DvrNalu nalu = std::move(naluQueue.front());
             naluQueue.pop();
             lock.unlock();
             // Process the NALU
-            auto res = mp4_h26x_write_nal(&mp4wr, nalu.getData(), nalu.getSize(), 90000 / framerate);
+            auto res = mp4_h26x_write_nal(&mp4wr, nalu.data.data(), (int) nalu.data.size(), 90000 / framerate);
             if (MP4E_STATUS_OK != res)
             {
                 __android_log_print(ANDROID_LOG_DEBUG, TAG, "mp4_h26x_write_nal failed with %d", res);
@@ -144,11 +144,9 @@ void VideoPlayer::onNewNALU(const NALU& nalu)
     {
         return;
     }
-    // Copy data to write if from a different thread.
-    uint8_t* m_data_copy = new uint8_t[nalu.getSize()];
-    memcpy(m_data_copy, nalu.getData(), nalu.getSize());
-    NALU nalu_(m_data_copy, nalu.getSize(), nalu.IS_H265_PACKET);
-    enqueueNALU(nalu_);
+    // The writer thread outlives this call, so hand it an owning copy.
+    enqueueNALU(DvrNalu{std::vector<uint8_t>(nalu.getData(), nalu.getData() + nalu.getSize()),
+                        nalu.IS_H265_PACKET});
 }
 
 void VideoPlayer::setVideoSurface(JNIEnv* env, jobject surface, jint i)
