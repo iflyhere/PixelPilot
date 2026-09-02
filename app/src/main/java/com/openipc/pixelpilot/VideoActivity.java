@@ -811,8 +811,12 @@ public class VideoActivity extends LinkClientActivity
             });
         }
 
-        MenuItem help = xrMenu.add("Controls: A recenter, B passthrough, X record, Y lock");
+        // Mirrored across both controllers, so one is enough. Head lock is not on a
+        // button - the Touch profile ran out of them - it is the checkbox above.
+        MenuItem help = xrMenu.add("A/X recenter, B/Y passthrough, stick click record");
         help.setEnabled(false);
+        MenuItem help2 = xrMenu.add("Stick height/size, trigger nearer, grip farther, menu exits");
+        help2.setEnabled(false);
     }
 
     /**
