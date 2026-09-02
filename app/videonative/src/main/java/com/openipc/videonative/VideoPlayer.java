@@ -9,7 +9,6 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 
 import androidx.annotation.Nullable;
-import androidx.appcompat.app.AppCompatActivity;
 
 import java.util.Timer;
 import java.util.TimerTask;
@@ -35,7 +34,7 @@ public class VideoPlayer implements IVideoParamsChanged {
     private Timer timer;
 
     // Setup as much as possible without creating the decoder
-    public VideoPlayer(final AppCompatActivity parent) {
+    public VideoPlayer(final Context parent) {
         this.context = parent;
         nativeVideoPlayer = nativeInitialize(context);
     }
@@ -159,6 +158,21 @@ public class VideoPlayer implements IVideoParamsChanged {
      */
     public void addAndStartDecoderReceiver(Surface surface, int index) {
         setVideoSurface(surface, index);
+    }
+
+    /**
+     * Point the decoder at a new output surface without touching the receivers.
+     *
+     * <p>This is what a surface change should do: the decoder is rebuilt for the new surface
+     * while UDP reception, and with it the wifi link, keeps running.
+     */
+    public void attachSurface(Surface surface, int index) {
+        setVideoSurface(surface, index);
+    }
+
+    /** Releases the decoder's output surface, leaving the receivers alone. */
+    public void detachSurface(int index) {
+        setVideoSurface(null, index);
     }
 
     /**

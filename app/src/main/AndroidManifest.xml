@@ -50,6 +50,13 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:usesCleartextTraffic="true"
         android:supportsRtl="true">
+        <!-- Owns the adapter, the wfb-ng link and the decoder for as long as either
+             presentation mode needs them, and across the switch between them. -->
+        <service
+            android:name=".LinkService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <service
             android:name=".WfbNgVpnService"
             android:label="Wfb-Ng VPN Service"

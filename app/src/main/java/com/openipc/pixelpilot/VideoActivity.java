@@ -61,11 +61,7 @@ import com.openipc.pixelpilot.databinding.ActivityVideoBinding;
 import com.openipc.pixelpilot.osd.OSDElement;
 import com.openipc.pixelpilot.osd.OSDManager;
 import com.openipc.videonative.DecodingInfo;
-import com.openipc.videonative.IVideoParamsChanged;
-import com.openipc.videonative.VideoPlayer;
 import com.openipc.wfbngrtl8812.WfbNGStats;
-import com.openipc.wfbngrtl8812.WfbNGStatsChanged;
-import com.openipc.wfbngrtl8812.WfbNgLink;
 import com.openipc.xr.XrGoggleSession;
 
 import java.io.BufferedReader;
@@ -94,6 +90,7 @@ import android.graphics.Bitmap;
 import android.os.SystemClock;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import android.view.SurfaceHolder;
 import android.view.TextureView;
 import android.graphics.SurfaceTexture;
 import android.view.Surface;
@@ -102,8 +99,8 @@ import java.util.regex.Pattern;
 
 // Most basic implementation of an activity that uses VideoNative to stream a video
 // Into an Android Surface View
-public class VideoActivity extends AppCompatActivity implements IVideoParamsChanged,
-        WfbNGStatsChanged, MavlinkUpdate, SettingsChanged, LinkStatusView {
+public class VideoActivity extends LinkClientActivity
+        implements MavlinkUpdate, SettingsChanged {
     private static final String TAG = "pixelpilot";
     private static final int PICK_KEY_REQUEST_CODE = 1;
     private static final int PICK_DVR_REQUEST_CODE = 2;
@@ -125,9 +122,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     };
     protected DecodingInfo mDecodingInfo;
     int lastVideoW = 0, lastVideoH = 0, lastCodec = 1;
-    WfbLinkManager wfbLinkManager;
     BroadcastReceiver batteryReceiver;
-    VideoPlayer videoPlayer;
     private ActivityVideoBinding binding;
     private OSDManager osdManager;
     private ParcelFileDescriptor dvrFd = null;
@@ -140,7 +135,6 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     private boolean videoUsesTextureView = false;
     private ConstraintLayout constraintLayout;
     private ConstraintSet constraintSet;
-    private WfbNgLink wfbLink;
 
     private ObjectDetectorHelper objectDetectorHelper;
     private ExecutorService objectDetectionExecutor;
@@ -368,12 +362,13 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
      * Initializes WFB-NG related logic such as setting default gs.key and linking
      * to WFB-NG stats changes.
      */
+    /**
+     * The adapter, the link and the decoder live in {@link LinkService}; this only makes sure
+     * the key it needs exists before the service constructs the native side.
+     */
     private void initializeWfbNg() {
         setDefaultGsKey();
         copyGSKey();
-        wfbLink = new WfbNgLink(this);
-        wfbLink.SetWfbNGStatsChanged(this);
-        wfbLinkManager = new WfbLinkManager(this, this, wfbLink);
     }
 
     // ----------------------------------------------------------------------------
@@ -384,10 +379,6 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
      * Initializes VideoPlayer and configures surfaces for VR or standard mode.
      */
     private void initializeVideoPlayers() {
-        videoPlayer = new VideoPlayer(this);
-        videoPlayer.setIVideoParamsChanged(this);
-        videoPlayer.setLowLatency(getLowLatencySetting(this));
-
         isVRMode = getVRSetting();
 
         if (isVRMode) {
@@ -403,8 +394,8 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     private void setupVRVideoPlayers() {
         binding.mainVideo.setVisibility(View.GONE);
         binding.mainVideoSurface.setVisibility(View.GONE);
-        binding.surfaceViewLeft.getHolder().addCallback(videoPlayer.configure1(0));
-        binding.surfaceViewRight.getHolder().addCallback(videoPlayer.configure1(1));
+        binding.surfaceViewLeft.getHolder().addCallback(surfaceCallback(0));
+        binding.surfaceViewRight.getHolder().addCallback(surfaceCallback(1));
     }
 
     /**
@@ -423,12 +414,66 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         if (videoUsesTextureView) {
             binding.mainVideoSurface.setVisibility(View.GONE);
             binding.mainVideo.setVisibility(View.VISIBLE);
-            binding.mainVideo.setSurfaceTextureListener(videoPlayer.configureTextureView(0));
+            binding.mainVideo.setSurfaceTextureListener(surfaceTextureListener(0));
         } else {
             binding.mainVideo.setVisibility(View.GONE);
             binding.mainVideoSurface.setVisibility(View.VISIBLE);
-            binding.mainVideoSurface.getHolder().addCallback(videoPlayer.configure1(0));
+            binding.mainVideoSurface.getHolder().addCallback(surfaceCallback(0));
         }
+    }
+
+    /**
+     * Hands a Surface to the service and takes it back again. Only the decoder's output
+     * changes; reception and the adapter are untouched, which is what makes switching modes
+     * and surviving a pause free of a reconnect.
+     */
+    private SurfaceHolder.Callback surfaceCallback(final int index) {
+        return new SurfaceHolder.Callback() {
+            @Override
+            public void surfaceCreated(SurfaceHolder holder) {
+                if (link != null) {
+                    link.attachSurface(holder.getSurface(), index);
+                }
+            }
+
+            @Override
+            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+            }
+
+            @Override
+            public void surfaceDestroyed(SurfaceHolder holder) {
+                if (link != null) {
+                    link.detachSurface(index);
+                }
+            }
+        };
+    }
+
+    private TextureView.SurfaceTextureListener surfaceTextureListener(final int index) {
+        return new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
+                if (link != null) {
+                    link.attachSurface(new Surface(texture), index);
+                }
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int width, int height) {
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
+                if (link != null) {
+                    link.detachSurface(index);
+                }
+                return true;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(SurfaceTexture texture) {
+            }
+        };
     }
 
     // ----------------------------------------------------------------------------
@@ -815,7 +860,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
             item.setChecked(enabled);
             getSharedPreferences("general", MODE_PRIVATE).edit()
                     .putBoolean("low_latency_decoder", enabled).apply();
-            videoPlayer.setLowLatency(enabled);
+            if (link != null) link.setLowLatency(enabled);
             Toast.makeText(this, "Low latency " + (enabled ? "enabled" : "disabled")
                     + ", applies on next video start.", Toast.LENGTH_SHORT).show();
             item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
@@ -890,8 +935,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
             SharedPreferences.Editor editor = getSharedPreferences("general", MODE_PRIVATE).edit();
             editor.putBoolean("adaptive_link_enabled", newState);
             editor.apply();
-            // Call instance method on the WfbNgLink instance via the wfbLinkManager.
-            wfbLink.nativeSetAdaptiveLinkEnabled(newState);
+            if (link != null && link.link() != null) link.link().nativeSetAdaptiveLinkEnabled(newState);
             return true;
         });
 
@@ -913,8 +957,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
                 SharedPreferences.Editor editor = getSharedPreferences("general", MODE_PRIVATE).edit();
                 editor.putInt("adaptive_tx_power", power);
                 editor.apply();
-                // Call instance method on the WfbNgLink instance via the wfbLinkManager.
-                wfbLink.nativeSetTxPower(power);
+                    if (link != null && link.link() != null) link.link().nativeSetTxPower(power);
                 return true;
             });
         }
@@ -931,8 +974,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
             SharedPreferences.Editor editor = getSharedPreferences("general", MODE_PRIVATE).edit();
             editor.putBoolean("custom_fec_enabled", newState);
             editor.apply();
-            // Call instance method on the WfbNgLink instance via the wfbLinkManager.
-            wfbLink.nativeSetUseFec(newState ? 1 : 0);
+            if (link != null && link.link() != null) link.link().nativeSetUseFec(newState ? 1 : 0);
             return true;
         });
 
@@ -947,7 +989,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
             SharedPreferences.Editor editor = getSharedPreferences("general", MODE_PRIVATE).edit();
             editor.putBoolean("custom_ldpc_enabled", newState);
             editor.apply();
-            wfbLink.nativeSetUseLdpc(newState ? 1 : 0);
+            if (link != null && link.link() != null) link.link().nativeSetUseLdpc(newState ? 1 : 0);
             return true;
         });
 
@@ -962,7 +1004,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
             SharedPreferences.Editor editor = getSharedPreferences("general", MODE_PRIVATE).edit();
             editor.putBoolean("custom_stbc_enabled", newState);
             editor.apply();
-            wfbLink.nativeSetUseStbc(newState ? 1 : 0);
+            if (link != null && link.link() != null) link.link().nativeSetUseStbc(newState ? 1 : 0);
             return true;
         });
 
@@ -1031,13 +1073,18 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
                 .show();
     }
 
+    /** The service applies these when it constructs the link; this re-applies after edits. */
     void initDefaultOptions() {
-        WfbOptions.applyDefaults(this, wfbLink);
+        if (link != null) {
+            WfbOptions.applyDefaults(this, link.link());
+        }
     }
 
     // Read FEC thresholds from prefs and call native method to apply
     private void setFecThresholdsFromPrefs() {
-        WfbOptions.applyFecThresholds(this, wfbLink);
+        if (link != null) {
+            WfbOptions.applyFecThresholds(this, link.link());
+        }
     }
 
     /**
@@ -1173,8 +1220,8 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         String ip = prefs.getString("forward_udp_ip", "192.168.1.100");
         int port = prefs.getInt("forward_udp_port", 5600);
 
-        if (videoPlayer != null) {
-            videoPlayer.setUdpForwarding(ip, port, enabled);
+        if (link != null) {
+            link.setUdpForwarding(ip, port, enabled);
         }
     }
 
@@ -1357,10 +1404,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
             if (dvrUri != null) {
                 startDvr(dvrUri);
             } else {
-                wfbLinkManager.stopAdapters();
-                videoPlayer.stop();
-                videoPlayer.stopAudio();
-
+                // No need to tear the link down for a file picker any more.
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
                 intent.addCategory(Intent.CATEGORY_DEFAULT);
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
@@ -1379,7 +1423,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         }
         try {
             dvrFd = getContentResolver().openFileDescriptor(dvrUri, "rw");
-            videoPlayer.startDvr(dvrFd.getFd(), getDvrMP4());
+            if (link != null) link.startDvr(dvrFd.getFd(), getDvrMP4());
             binding.imgBtnRecord.setImageResource(R.drawable.recording);
         } catch (IOException e) {
             Log.e(TAG, "Failed to open dvr file ", e);
@@ -1416,7 +1460,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         }
         binding.imgRecIndicator.setVisibility(View.INVISIBLE);
         binding.imgBtnRecord.setImageResource(R.drawable.record);
-        videoPlayer.stopDvr();
+        if (link != null) link.stopDvr();
         if (recordTimer != null) {
             recordTimer.cancel();
             recordTimer.purge();
@@ -1448,7 +1492,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
                     InputStream inputStream = getContentResolver().openInputStream(uri);
                     setGsKey(inputStream);
                     copyGSKey();
-                    wfbLinkManager.refreshKey();
+                    if (link != null) link.refreshKey();
                     inputStream.close();
                 } catch (IOException e) {
                     Log.e(TAG, "Failed to import gs.key from " + uri);
@@ -1517,27 +1561,17 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    /** Only the battery overlay: the USB receiver belongs to LinkService with the adapter. */
     public void registerReceivers() {
-        IntentFilter usbFilter = new IntentFilter();
-        usbFilter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
-        usbFilter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
-        usbFilter.addAction(WfbLinkManager.ACTION_USB_PERMISSION);
         IntentFilter batFilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
-
         if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(wfbLinkManager, usbFilter, Context.RECEIVER_NOT_EXPORTED);
             registerReceiver(batteryReceiver, batFilter, Context.RECEIVER_NOT_EXPORTED);
         } else {
-            registerReceiver(wfbLinkManager, usbFilter);
             registerReceiver(batteryReceiver, batFilter);
         }
     }
 
     public void unregisterReceivers() {
-        try {
-            unregisterReceiver(wfbLinkManager);
-        } catch (IllegalArgumentException ignored) {
-        }
         try {
             unregisterReceiver(batteryReceiver);
         } catch (IllegalArgumentException ignored) {
@@ -1549,18 +1583,11 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         super.onPause();
 
         stopObjectDetectionLoop();
-
         unregisterReceivers();
 
-        videoPlayer.stop();
-        videoPlayer.stopAudio();
-        wfbLinkManager.stopAdapters();
-
-        // Stop VPN service
-        Log.w(TAG, "onPause: stopping service");
-        Intent intent = new Intent(this, WfbNgVpnService.class);
-        intent.setAction("STOP_SERVICE");
-        startService(intent);
+        // The link deliberately stays up: it belongs to LinkService now. Tearing it down
+        // here is what used to cost seconds of black screen every time a system menu or a
+        // dialog took focus.
     }
 
     @Override
@@ -1574,9 +1601,6 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         MavlinkNative.nativeStop(this);
         handler.removeCallbacks(runnable);
         unregisterReceivers();
-        wfbLinkManager.stopAdapters();
-        videoPlayer.stop();
-        videoPlayer.stopAudio();
         super.onStop();
     }
 
@@ -1584,16 +1608,11 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     protected void onResume() {
         registerReceivers();
 
-        wfbLinkManager.setChannel(getChannel(this));
-        wfbLinkManager.setBandwidth(getBandwidth(this));
-
-        // On resume is called when the app is reopened, a device might have been plugged since the last time it started.
-        wfbLinkManager.refreshAdapters();
-
-        wfbLinkManager.startAdapters();
-        videoPlayer.start();
-        updateUdpForwardingState();
-        videoPlayer.startAudio();
+        // An adapter may have been plugged in while we were away.
+        if (link != null) {
+            link.ensureAdapters();
+            updateUdpForwardingState();
+        }
 
         SharedPreferences prefs = getSharedPreferences("general", MODE_PRIVATE);
         boolean odEnabled = prefs.getBoolean("od_enabled", false);
@@ -1607,6 +1626,12 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     @Override
+    protected void onLinkServiceConnected(LinkService service) {
+        service.ensureAdapters();
+        updateUdpForwardingState();
+    }
+
+    @Override
     public void onChannelSettingChanged(int channel) {
         int currentChannel = getChannel(this);
         if (currentChannel == channel) {
@@ -1616,9 +1641,9 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         SharedPreferences.Editor editor = prefs.edit();
         editor.putInt("wifi-channel", channel);
         editor.apply();
-        wfbLinkManager.stopAdapters();
-        wfbLinkManager.setChannel(channel);
-        wfbLinkManager.startAdapters();
+        if (link != null) {
+            link.setChannel(channel);
+        }
     }
 
     @Override
@@ -1631,13 +1656,13 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         SharedPreferences.Editor editor = prefs.edit();
         editor.putInt("bandwidth", bandwidth);
         editor.apply();
-        wfbLinkManager.stopAdapters();
-        wfbLinkManager.setBandwidth(bandwidth);
-        wfbLinkManager.startAdapters();
+        if (link != null) {
+            link.setBandwidth(bandwidth);
+        }
     }
 
     @Override
-    public void onVideoRatioChanged(final int videoW, final int videoH) {
+    public void onVideoResolution(final int videoW, final int videoH) {
         lastVideoW = videoW;
         lastVideoH = videoH;
 
@@ -1666,7 +1691,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     @Override
-    public void onDecodingInfoChanged(final DecodingInfo decodingInfo) {
+    public void onDecodingInfo(final DecodingInfo decodingInfo) {
         mDecodingInfo = decodingInfo;
         runOnUiThread(() -> {
             if (lastCodec != decodingInfo.nCodec) {
@@ -1687,7 +1712,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     @Override
-    public void onWfbNgStatsChanged(WfbNGStats data) {
+    public void onWfbStats(WfbNGStats data) {
         runOnUiThread(() -> {
             if (data.count_p_all > 0) {
                 binding.tvMessage.setVisibility(View.INVISIBLE);
@@ -1754,10 +1779,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     @Override
-    public void showLinkMessage(String message) {
-        // Also to the log: this used to only reach the overlay, so a bug report had no
-        // record of what the app actually said about the link.
-        Log.i(TAG, "link: " + message);
+    public void onLinkStatus(String message) {
         runOnUiThread(() -> {
             binding.tvMessage.setVisibility(View.VISIBLE);
             binding.tvMessage.setText(message);
@@ -1765,7 +1787,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     @Override
-    public void showLocalStreamHint(String url) {
+    public void onLocalStreamHint(String url) {
         runOnUiThread(() -> {
             binding.wifiMessage.setText(url);
             binding.wifiMessage.setVisibility(View.VISIBLE);

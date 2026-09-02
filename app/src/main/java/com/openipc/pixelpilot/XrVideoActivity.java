@@ -8,7 +8,6 @@ import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
 import android.os.Build;
@@ -25,18 +24,11 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
-import androidx.appcompat.app.AppCompatActivity;
 
-import com.openipc.videonative.DecodingInfo;
-import com.openipc.videonative.IVideoParamsChanged;
-import com.openipc.videonative.VideoPlayer;
 import com.openipc.wfbngrtl8812.WfbNGStats;
-import com.openipc.wfbngrtl8812.WfbNGStatsChanged;
-import com.openipc.wfbngrtl8812.WfbNgLink;
 import com.openipc.xr.XrGoggleSession;
 
 import java.io.IOException;
-import java.util.Map;
 
 /**
  * Immersive ground station.
@@ -47,12 +39,16 @@ import java.util.Map;
  * layer. That removes the view hierarchy, SurfaceFlinger and the panel's fixed resolution
  * from the video path.
  *
+ * <p>The adapter, the wfb-ng link and the decoder belong to {@link LinkService}, not to this
+ * activity. Entering and leaving immersive mode therefore only swaps the decoder's output
+ * surface - the adapter is never reopened, so there is no reconnect delay and no second USB
+ * permission prompt.
+ *
  * <p>There is no in-headset menu yet: channel, bandwidth and the DVR folder are still
  * configured in {@link VideoActivity} before putting the headset on. Controllers cover
  * what matters in flight.
  */
-public class XrVideoActivity extends AppCompatActivity
-        implements XrGoggleSession.Listener, IVideoParamsChanged, WfbNGStatsChanged, LinkStatusView {
+public class XrVideoActivity extends LinkClientActivity implements XrGoggleSession.Listener {
 
     private static final String TAG = "pixelpilot-xr";
 
@@ -82,9 +78,6 @@ public class XrVideoActivity extends AppCompatActivity
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private XrGoggleSession xr;
-    private VideoPlayer videoPlayer;
-    private WfbNgLink wfbLink;
-    private WfbLinkManager wfbLinkManager;
     private TextView statusView;
 
     // The flat activity may still be releasing the USB interface when we get here, so the
@@ -143,22 +136,6 @@ public class XrVideoActivity extends AppCompatActivity
             return;
         }
 
-        videoPlayer = new VideoPlayer(this);
-        videoPlayer.setIVideoParamsChanged(this);
-        videoPlayer.setLowLatency(VideoActivity.getLowLatencySetting(this));
-
-        // The native aggregators open files/gs.key in their constructor and throw if it
-        // is not there, so this has to happen before WfbNgLink is created.
-        if (!GsKey.ensure(this)) {
-            failToFlat("no usable gs.key");
-            return;
-        }
-        wfbLink = new WfbNgLink(this);
-        wfbLink.SetWfbNGStatsChanged(this);
-        // Not read by the native side on its own: adaptive link, TX power, FEC/LDPC/STBC.
-        WfbOptions.applyDefaults(this, wfbLink);
-        wfbLinkManager = new WfbLinkManager(this, this, wfbLink);
-
         xr = new XrGoggleSession(this, this);
         SharedPreferences prefs = prefs();
         // Match the swapchain to the stream so the compositor never resamples twice. The
@@ -173,13 +150,20 @@ public class XrVideoActivity extends AppCompatActivity
     }
 
     @Override
-    protected void onResume() {
-        super.onResume();
+    protected void onLinkServiceConnected(LinkService service) {
         if (xr == null) {
             return;
         }
         registerUsbReceiver();
         tryBringUpLink();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (xr != null && link != null) {
+            tryBringUpLink();
+        }
     }
 
     // Deliberately no teardown in onPause/onStop. In an immersive session the runtime
@@ -197,16 +181,15 @@ public class XrVideoActivity extends AppCompatActivity
             // never registered
         }
         stopDvr();
+        // Hand the decoder's surface back but leave the link running: the flat activity is
+        // about to take over, and the whole point of the service is that the adapter stays
+        // open across the switch.
+        if (link != null) {
+            link.detachSurface(0);
+        }
         if (xr != null) {
             xr.release();
             xr = null;
-        }
-        if (wfbLinkManager != null) {
-            wfbLinkManager.stopAdapters();
-        }
-        if (videoPlayer != null) {
-            videoPlayer.stopAudio();
-            videoPlayer.stop();
         }
         super.onDestroy();
     }
@@ -237,17 +220,10 @@ public class XrVideoActivity extends AppCompatActivity
      * immersive session.
      */
     private void tryBringUpLink() {
-        if (xr == null) {
+        if (xr == null || link == null) {
             return;
         }
-        wfbLinkManager.setChannel(VideoActivity.getChannel(this));
-        wfbLinkManager.setBandwidth(VideoActivity.getBandwidth(this));
-        wfbLinkManager.refreshAdapters();
-
-        if (!adaptersReady()) {
-            // refreshAdapters() has asked for permission; the broadcast brings us back.
-            return;
-        }
+        link.ensureAdapters();
 
         // Going immersive does not depend on the link, and the pilot is better off seeing the
         // status screen with a reason than a flat activity that says nothing.
@@ -257,29 +233,15 @@ public class XrVideoActivity extends AppCompatActivity
             xr.start();
         }
 
-        if (!wfbLinkManager.hasActiveAdapter() && linkRetries < LINK_RETRY_LIMIT) {
+        // The adapter may still be waiting for a USB permission the service asked for, so
+        // keep checking back rather than giving up on the first look.
+        if (!link.hasActiveAdapter() && linkRetries < LINK_RETRY_LIMIT) {
             linkRetries++;
             Log.i(TAG, "adapter not up yet, retry " + linkRetries + "/" + LINK_RETRY_LIMIT);
             handler.postDelayed(this::tryBringUpLink, LINK_RETRY_INTERVAL_MS);
-        } else if (wfbLinkManager.hasActiveAdapter()) {
+        } else if (link.hasActiveAdapter()) {
             linkRetries = 0;
         }
-    }
-
-    /** True when every attached compatible adapter is usable (or there is none at all). */
-    private boolean adaptersReady() {
-        Map<String, UsbDevice> adapters = wfbLinkManager.getAttachedAdapters();
-        if (adapters == null || adapters.isEmpty()) {
-            // Nothing attached: still go immersive, the stream may arrive over UDP.
-            return true;
-        }
-        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
-        for (UsbDevice device : adapters.values()) {
-            if (!usbManager.hasPermission(device)) {
-                return false;
-            }
-        }
-        return true;
     }
 
     @Override
@@ -290,15 +252,17 @@ public class XrVideoActivity extends AppCompatActivity
         // an opaque black rectangle until the first frame arrives, which is
         // indistinguishable from "nothing is being composited at all".
         drawStatusScreen();
-        // The decoder writes into the compositor swapchain from here on.
-        videoPlayer.addAndStartDecoderReceiver(videoSurface, 0);
-        videoPlayer.start();
-        videoPlayer.startAudio();
+        // The decoder writes into the compositor swapchain from here on. Only the surface
+        // changes - the receivers and the adapter keep running in the service.
+        if (link != null) {
+            link.attachSurface(videoSurface, 0);
+            if (link.videoWidth() > 0) {
+                xr.setVideoResolution(link.videoWidth(), link.videoHeight());
+            }
+        }
         applyRefreshRatePreference();
         statusView.setVisibility(View.GONE);
         linkStarted = true;
-        // Not startAdapters(): tryBringUpLink() -> refreshAdapters() already owns bringing the
-        // adapter up, and it retries. Two paths racing for one dongle is what broke this.
     }
 
     private void applyRefreshRatePreference() {
@@ -494,9 +458,12 @@ public class XrVideoActivity extends AppCompatActivity
             Toast.makeText(this, "Could not create the recording file", Toast.LENGTH_LONG).show();
             return;
         }
+        if (link == null) {
+            return;
+        }
         try {
             dvrFd = getContentResolver().openFileDescriptor(target, "rw");
-            videoPlayer.startDvr(dvrFd.getFd(), DvrFiles.fragmentedMp4(this));
+            link.startDvr(dvrFd.getFd(), DvrFiles.fragmentedMp4(this));
             xr.haptic(0.7f, 120);
             Toast.makeText(this, "Recording", Toast.LENGTH_SHORT).show();
         } catch (IOException e) {
@@ -510,7 +477,9 @@ public class XrVideoActivity extends AppCompatActivity
         if (dvrFd == null) {
             return;
         }
-        videoPlayer.stopDvr();
+        if (link != null) {
+            link.stopDvr();
+        }
         try {
             dvrFd.close();
         } catch (IOException e) {
@@ -524,7 +493,7 @@ public class XrVideoActivity extends AppCompatActivity
     // ------------------------------------------------------------------------------
 
     @Override
-    public void onVideoRatioChanged(int videoW, int videoH) {
+    public void onVideoResolution(int videoW, int videoH) {
         if (videoW <= 0 || videoH <= 0) {
             return;
         }
@@ -538,12 +507,7 @@ public class XrVideoActivity extends AppCompatActivity
     }
 
     @Override
-    public void onDecodingInfoChanged(DecodingInfo decodingInfo) {
-        // Nothing to draw in immersive mode yet.
-    }
-
-    @Override
-    public void onWfbNgStatsChanged(WfbNGStats data) {
+    public void onWfbStats(WfbNGStats data) {
         lastStats = data;
         // Without this there is no way to tell "the adapter is dead" from "the link is fine
         // but nothing decodes" while wearing the headset.
@@ -577,12 +541,11 @@ public class XrVideoActivity extends AppCompatActivity
     }
 
     // ------------------------------------------------------------------------------
-    // LinkStatusView
+    // link service callbacks
     // ------------------------------------------------------------------------------
 
     @Override
-    public void showLinkMessage(String message) {
-        Log.i(TAG, message);
+    public void onLinkStatus(String message) {
         lastStatus = message;
         runOnUiThread(() -> {
             if (statusView != null && !linkStarted) {
@@ -592,7 +555,7 @@ public class XrVideoActivity extends AppCompatActivity
     }
 
     @Override
-    public void showLocalStreamHint(String url) {
+    public void onLocalStreamHint(String url) {
         Log.i(TAG, "listening on " + url);
     }
 }
