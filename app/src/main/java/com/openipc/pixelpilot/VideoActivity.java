@@ -308,6 +308,7 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
             finish();
             return;
         }
+        ModeOwner.claim(this);
 
         // UI Setup
         initializeUI();
@@ -1560,6 +1561,12 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         Intent intent = new Intent(this, WfbNgVpnService.class);
         intent.setAction("STOP_SERVICE");
         startService(intent);
+    }
+
+    @Override
+    protected void onDestroy() {
+        ModeOwner.release(this);
+        super.onDestroy();
     }
 
     @Override

@@ -124,6 +124,9 @@ public class XrVideoActivity extends AppCompatActivity
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         active = true;
+        // Evict the flat activity: it owns a WfbNgLink too, and the adapter can only belong
+        // to one of them.
+        ModeOwner.claim(this);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         // Only shown while still flat: USB permission, errors, "waiting for adapter".
@@ -186,6 +189,7 @@ public class XrVideoActivity extends AppCompatActivity
     @Override
     protected void onDestroy() {
         active = false;
+        ModeOwner.release(this);
         persistGeometry();
         try {
             unregisterReceiver(usbReceiver);

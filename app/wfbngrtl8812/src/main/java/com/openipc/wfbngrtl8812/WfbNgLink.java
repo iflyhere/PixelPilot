@@ -118,10 +118,14 @@ public class WfbNgLink implements WfbNGStatsChanged {
     }
 
     public synchronized boolean start(int wifiChannel, int bandWidth, UsbDevice usbDevice) {
-        // A second RX loop on the same adapter means two libusb handles on one interface:
-        // neither gets usable video, the old thread is orphaned because linkThreads.put()
-        // overwrites its entry, and stopAll() then joins only the last one - which is how
-        // three live "wfb-001/002" threads and a hung main thread happen.
+        // A second RX loop on the same adapter means two libusb handles on one interface,
+        // and the old thread is orphaned because linkThreads.put() overwrites its entry, so
+        // stopAll() then joins only the last one.
+        //
+        // (Note: three threads named "wfb-001/002" is *normal* for one adapter - the TX and
+        // adaptive-link threads inherit the RX thread's name because nothing renames them.
+        // An earlier reading of that as three RX loops was wrong; the guard is still right,
+        // because two activities each with their own WfbNgLink really can double-start.)
         Thread existing = linkThreads.get(usbDevice);
         if (existing != null && existing.isAlive()) {
             Log.w(TAG, "wfb-ng already running on " + usbDevice.getDeviceName() + ", not starting a second");
