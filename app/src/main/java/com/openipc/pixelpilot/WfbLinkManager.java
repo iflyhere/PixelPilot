@@ -103,7 +103,12 @@ public class WfbLinkManager extends BroadcastReceiver {
         }
 
         Map<String, UsbDevice> res = new HashMap<>();
-        for (UsbDevice dev : manager.getDeviceList().values()) {
+        Map<String, UsbDevice> attached = manager.getDeviceList();
+        // Without this there is no way to tell "nothing is plugged in" from "the dongle is
+        // there but its id is not in usb_device_filter.xml", and the id is what a bug report
+        // needs in order to add it.
+        Log.i(TAG, "usb devices attached: " + attached.size());
+        for (UsbDevice dev : attached.values()) {
             boolean allowed = false;
             for (UsbDeviceFilter filter : filters) {
                 if (filter.productId == dev.getProductId() && filter.vendorId == dev.getVendorId()) {
@@ -111,6 +116,13 @@ public class WfbLinkManager extends BroadcastReceiver {
                     break;
                 }
             }
+            Log.i(TAG, String.format("  %s  %04X:%04X  %s %s  -> %s",
+                    dev.getDeviceName(),
+                    dev.getVendorId(),
+                    dev.getProductId(),
+                    String.valueOf(dev.getManufacturerName()),
+                    String.valueOf(dev.getProductName()),
+                    allowed ? "supported" : "NOT in usb_device_filter.xml"));
             if (!allowed) {
                 continue;
             }
@@ -160,6 +172,7 @@ public class WfbLinkManager extends BroadcastReceiver {
         }
 
         // Starts newly attached adapters.
+        boolean startFailed = false;
         for (Map.Entry<String, UsbDevice> entry : attachedAdapters.entrySet()) {
             if (activeWifiAdapters.containsKey(entry.getKey())) {
                 continue;
@@ -168,11 +181,21 @@ public class WfbLinkManager extends BroadcastReceiver {
             // is never retried on the next refresh.
             if (startAdapter(entry.getValue())) {
                 activeWifiAdapters.put(entry.getKey(), entry.getValue());
+            } else {
+                startFailed = true;
             }
         }
 
         if (activeWifiAdapters.isEmpty()) {
-            status.showLinkMessage("No compatible wifi adapter found.");
+            // These are three different problems and telling the pilot the wrong one costs
+            // a lot of pointless searching.
+            if (startFailed) {
+                status.showLinkMessage("Wifi adapter found but could not be started - see the log.");
+            } else if (attachedAdapters.isEmpty()) {
+                status.showLinkMessage("No compatible wifi adapter found.");
+            } else {
+                status.showLinkMessage("Waiting for wifi adapter permission…");
+            }
 
             String wifi = VideoActivity.wirelessInfo(context);
             if (wifi != null) {

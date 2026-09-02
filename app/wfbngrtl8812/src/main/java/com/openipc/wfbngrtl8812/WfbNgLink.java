@@ -186,10 +186,15 @@ public class WfbNgLink implements WfbNGStatsChanged {
         t.join(JOIN_TIMEOUT_MS);
         if (t.isAlive()) {
             Log.e(TAG, "wfb-ng thread on " + what + " did not stop within " + JOIN_TIMEOUT_MS
-                    + "ms, leaving it behind");
+                    + "ms, giving up the claim anyway");
         } else {
             Log.d(TAG, "wfb-ng thread on " + what + " done.");
         }
+        // Drop the claim even if the thread outstayed its welcome. Holding it would leave the
+        // adapter unopenable until the process restarts, and the user would be told there is
+        // no compatible adapter - a worse failure than the duplicate this guards against,
+        // which the per-instance check and the single-owner handoff already prevent.
+        release(what, t);
     }
 
     public synchronized void stopAll() throws InterruptedException {
