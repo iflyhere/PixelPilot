@@ -1,10 +1,12 @@
 package com.openipc.pixelpilot;
 
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -51,6 +53,47 @@ import java.io.IOException;
 public class XrVideoActivity extends LinkClientActivity implements XrGoggleSession.Listener {
 
     private static final String TAG = "pixelpilot-xr";
+
+    /**
+     * Enables or disables this activity's launcher entry to match the device.
+     *
+     * <p>The entry is what lets Horizon OS start the app straight into VR, but the manifest
+     * cannot express "only on a device with an XR runtime", so it ships disabled and is
+     * switched on here. On a phone it stays off and nothing about the flat mode changes -
+     * no second icon, no way to land on an activity that cannot create a session.
+     *
+     * <p>Enabling the component is also what makes {@code startActivity} on it work at all,
+     * so this has to run before VideoActivity's menu can offer it - hence {@code onCreate}
+     * rather than when the menu is opened. Both are gated on the same predicate, so a device
+     * {@link XrGoggleSession#isSupportedDevice} does not recognise sees neither the entry nor
+     * the menu; if that ever turns out to be a false negative, widening that check is the fix.
+     */
+    static void syncLauncherEntry(Context context) {
+        boolean wantEnabled = XrGoggleSession.isSupportedDevice(context);
+        ComponentName component = new ComponentName(context, XrVideoActivity.class);
+        PackageManager pm = context.getPackageManager();
+        try {
+            // COMPONENT_ENABLED_STATE_DEFAULT means "whatever the manifest said", which here
+            // is disabled - so anything other than an explicit ENABLED counts as off.
+            boolean isEnabled = pm.getComponentEnabledSetting(component)
+                    == PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
+            if (isEnabled == wantEnabled) {
+                return;
+            }
+            pm.setComponentEnabledSetting(
+                    component,
+                    wantEnabled
+                            ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                            // Back to the manifest value rather than an explicit disable, so
+                            // an unrecognised device is left exactly as it shipped.
+                            : PackageManager.COMPONENT_ENABLED_STATE_DEFAULT,
+                    PackageManager.DONT_KILL_APP);
+            Log.i(TAG, "immersive launcher entry " + (wantEnabled ? "enabled" : "disabled"));
+        } catch (Exception e) {
+            // A launcher entry is not worth taking the flat mode down over.
+            Log.w(TAG, "could not update the immersive launcher entry", e);
+        }
+    }
 
     // Preference keys, all in the shared "general" store so the flat activity's settings
     // menu can write them.

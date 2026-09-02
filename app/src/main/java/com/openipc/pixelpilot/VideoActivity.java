@@ -307,6 +307,9 @@ public class VideoActivity extends LinkClientActivity
         }
         ModeOwner.claim(this);
 
+        // Keep the immersive launcher entry in step with what this device can run.
+        XrVideoActivity.syncLauncherEntry(this);
+
         // UI Setup
         initializeUI();
 

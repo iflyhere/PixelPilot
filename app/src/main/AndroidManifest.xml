@@ -108,6 +108,7 @@
         <activity
             android:name=".XrVideoActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation"
+            android:enabled="false"
             android:exported="true"
             android:label="@string/app_name_xr"
             android:launchMode="singleTask"
@@ -115,8 +116,12 @@
             android:theme="@style/Theme.FPVueMat">
             <!-- Horizon OS and Android XR pick the immersive launch path from the VR
                  category. It is a separate launcher entry so the flat activity keeps
-                 working unchanged, including its USB_DEVICE_ATTACHED filter. On a phone
-                 the session fails to create and the activity hands back to VideoActivity. -->
+                 working unchanged, including its USB_DEVICE_ATTACHED filter.
+
+                 Shipped disabled: on a phone this entry would be a second icon leading to
+                 an activity that cannot create a session, and there is no manifest
+                 condition for "device has an XR runtime". VideoActivity.onCreate turns it
+                 on where it can actually run - see XrVideoActivity.syncLauncherEntry. -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="com.oculus.intent.category.VR" />
