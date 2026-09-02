@@ -220,6 +220,10 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
     }
 
     private void resetApp() {
+        // Finalize an active recording first. System.exit() below skips every lifecycle
+        // callback, and the MP4 is only closed when the DVR thread exits; stopDvr() joins
+        // it. No-op when nothing is recording.
+        stopDvr();
         // Restart the app
         Intent intent = getPackageManager().getLaunchIntentForPackage(getPackageName());
         if (intent != null) {
@@ -702,6 +706,11 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
      * "Low latency" sets the MediaCodec low-latency and realtime-priority keys. It is on
      * by default; decoders that misbehave with those keys can be put back on the stock
      * pipeline here.
+     *
+     * The keys are only applied when the codec is configured, and the codec is only torn
+     * down when its surface goes away, not on a channel change or on VideoPlayer
+     * stop()/start(). So the toggle restarts the app, the same way the VR mode toggle
+     * does, instead of promising an "on next video start" that never comes.
      */
     private void setupVideoSubMenu(PopupMenu popup) {
         SubMenu videoMenu = popup.getMenu().addSubMenu("Video");
@@ -712,13 +721,13 @@ public class VideoActivity extends AppCompatActivity implements IVideoParamsChan
         lowLatencyItem.setOnMenuItemClickListener(item -> {
             boolean enabled = !item.isChecked();
             item.setChecked(enabled);
+            // commit(), not apply(): resetApp() ends the process with System.exit()
+            // before an asynchronous write would be flushed.
             getSharedPreferences("general", MODE_PRIVATE).edit()
-                    .putBoolean("low_latency_decoder", enabled).apply();
-            videoPlayer.setLowLatency(enabled);
-            Toast.makeText(this, "Low latency " + (enabled ? "enabled" : "disabled")
-                    + ", applies on next video start.", Toast.LENGTH_SHORT).show();
+                    .putBoolean("low_latency_decoder", enabled).commit();
             item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
             item.setActionView(new View(this));
+            resetApp();
             return false;
         });
     }
