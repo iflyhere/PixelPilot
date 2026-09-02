@@ -35,17 +35,28 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # A fresh runner generates a new debug keystore every run, which makes every APK
-      # signed with a different key and forces an uninstall before each test install.
-      # Caching it keeps the signature stable so `adb install -r` works.
-      - name: Cache debug keystore
+      # A fresh runner generates a new debug keystore every run, so every APK gets a
+      # different signature and each test install needs an uninstall first - which wipes the
+      # app's settings, channel included, and that looks exactly like a bug. Caching
+      # ~/.android/debug.keystore did not work (the runner puts it elsewhere), so the key is
+      # created explicitly in the workspace and that file is what gets cached.
+      - name: Cache signing key
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
-          key: android-debug-keystore-v1
+          path: ci-debug.keystore
+          key: android-ci-debug-keystore-v2
+
+      - name: Ensure signing key
+        run: |
+          if [ ! -f ci-debug.keystore ]; then
+            echo "generating a new CI signing key"
+            keytool -genkeypair -v -keystore ci-debug.keystore               -storepass android -keypass android -alias pixelpilotci               -keyalg RSA -keysize 2048 -validity 10000               -dname "CN=PixelPilot Test Build, OU=CI, O=PixelPilot, C=DE"
+          fi
+          keytool -list -keystore ci-debug.keystore -storepass android | tail -2
 
       - name: Assemble debug
-        run: ./gradlew --no-daemon assembleDebug
+        run: |
+          ./gradlew --no-daemon assembleDebug             -Pandroid.injected.signing.store.file="$PWD/ci-debug.keystore"             -Pandroid.injected.signing.store.password=android             -Pandroid.injected.signing.key.alias=pixelpilotci             -Pandroid.injected.signing.key.password=android
 
       - name: Name the artifact
         id: name
