@@ -132,6 +132,7 @@ public class VideoPlayer implements IVideoParamsChanged {
      * Takes effect the next time the decoder is configured.
      */
     public void setLowLatency(boolean enabled) {
+        verifyApplicationThread();
         nativeSetLowLatency(nativeVideoPlayer, enabled);
     }
 

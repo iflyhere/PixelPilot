@@ -98,15 +98,16 @@ public class WfbLinkManager extends BroadcastReceiver {
         try {
             filters = UsbDeviceFilter.parseXml(context, R.xml.usb_device_filter);
         } catch (Exception e) {
-            e.printStackTrace();
-            return null;
+            Log.e(TAG, "Unable to parse USB device filter", e);
+            return new HashMap<>();
         }
 
         Map<String, UsbDevice> res = new HashMap<>();
         Map<String, UsbDevice> attached = manager.getDeviceList();
-        // Without this there is no way to tell "nothing is plugged in" from "the dongle is
-        // there but its id is not in usb_device_filter.xml", and the id is what a bug report
-        // needs in order to add it.
+        // "No compatible wifi adapter found." is a common report, and the one thing needed to
+        // act on it - the adapter's vendor and product id - was not obtainable. sysfs is not
+        // readable by the shell on some devices (Horizon OS for one) and dumpsys usb does not
+        // list host devices there either, so the app is the only thing that can report it.
         Log.i(TAG, "usb devices attached: " + attached.size());
         for (UsbDevice dev : attached.values()) {
             boolean allowed = false;

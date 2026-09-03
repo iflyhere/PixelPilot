@@ -177,9 +177,13 @@ public class VideoActivity extends LinkClientActivity
     }
 
     /**
-     * IPv4 address of the phone/headset on its own wifi, used to tell the pilot where to
-     * push a stream when no adapter is attached. Returns null when there is nothing to
-     * report - a headset in particular may have no WifiManager state to read at all.
+     * IPv4 address on the device's own wifi, used to tell the user where to push a stream
+     * when no adapter is attached. Returns null when there is nothing to report.
+     *
+     * <p>Takes a Context rather than reading a static WifiManager that only
+     * {@link #initializeUI()} assigns: any other caller - or this one before onCreate has got
+     * that far - hits a NullPointerException, and this is called from
+     * WfbLinkManager.refreshAdapters().
      */
     public static String wirelessInfo(Context context) {
         WifiManager manager =
@@ -217,6 +221,10 @@ public class VideoActivity extends LinkClientActivity
     }
 
     private void resetApp() {
+        // Finalize an active recording first. System.exit() below skips every lifecycle
+        // callback, and the MP4 is only closed when the DVR thread exits; stopDvr() joins
+        // it. No-op when nothing is recording.
+        stopDvr();
         // Restart the app
         Intent intent = getPackageManager().getLaunchIntentForPackage(getPackageName());
         if (intent != null) {
@@ -414,8 +422,16 @@ public class VideoActivity extends LinkClientActivity
         // Object detection reads frames back with TextureView.getBitmap(), which forces
         // the video through the view hierarchy's GPU composition. Without it a
         // SurfaceView is used so the video stays on a hardware overlay plane.
+        //
+        // The preference alone is not enough: setObjectDetectionEnabled() turns detection
+        // back off in onResume when the runtime or the selected model is missing, and returns
+        // before the renderer swap - which would leave the session on the TextureView with
+        // nothing reading from it. Both checks are cheap when od_enabled is false, and when
+        // it is true the runtime check only loads a library that is about to be used anyway.
         videoUsesTextureView = getSharedPreferences("general", MODE_PRIVATE)
-                .getBoolean("od_enabled", false);
+                        .getBoolean("od_enabled", false)
+                && isObjectDetectionRuntimeSupported()
+                && isSelectedObjectDetectionModelAvailable();
 
         if (videoUsesTextureView) {
             binding.mainVideoSurface.setVisibility(View.GONE);
@@ -864,6 +880,11 @@ public class VideoActivity extends LinkClientActivity
      * "Low latency" sets the MediaCodec low-latency and realtime-priority keys. It is on
      * by default; decoders that misbehave with those keys can be put back on the stock
      * pipeline here.
+     *
+     * The keys are only applied when the codec is configured, and the codec is only torn
+     * down when its surface goes away, not on a channel change or on VideoPlayer
+     * stop()/start(). So the toggle restarts the app, the same way the VR mode toggle
+     * does, instead of promising an "on next video start" that never comes.
      */
     private void setupVideoSubMenu(PopupMenu popup) {
         SubMenu videoMenu = popup.getMenu().addSubMenu("Video");
@@ -874,13 +895,13 @@ public class VideoActivity extends LinkClientActivity
         lowLatencyItem.setOnMenuItemClickListener(item -> {
             boolean enabled = !item.isChecked();
             item.setChecked(enabled);
+            // commit(), not apply(): resetApp() ends the process with System.exit()
+            // before an asynchronous write would be flushed.
             getSharedPreferences("general", MODE_PRIVATE).edit()
-                    .putBoolean("low_latency_decoder", enabled).apply();
-            if (link != null) link.setLowLatency(enabled);
-            Toast.makeText(this, "Low latency " + (enabled ? "enabled" : "disabled")
-                    + ", applies on next video start.", Toast.LENGTH_SHORT).show();
+                    .putBoolean("low_latency_decoder", enabled).commit();
             item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
             item.setActionView(new View(this));
+            resetApp();
             return false;
         });
     }
@@ -2113,7 +2134,19 @@ public class VideoActivity extends LinkClientActivity
         }
 
         isObjectDetectionEnabled = enabled;
-        prefs.edit().putBoolean("od_enabled", enabled).apply();
+        // commit(), not apply(): the restart below ends the process with System.exit()
+        // before an asynchronous write would be flushed, and the renderer picked on the
+        // next launch is read from exactly this value.
+        prefs.edit().putBoolean("od_enabled", enabled).commit();
+
+        // Enabling / disabling detection swaps the main video renderer. Handing the
+        // decoder a different surface at runtime would need the receiver lifecycle in
+        // VideoPlayer reworked, so restart instead - same as the VR mode toggle does.
+        if (!isVRMode && enabled != videoUsesTextureView) {
+            Toast.makeText(this, "Restarting to switch video renderer...", Toast.LENGTH_SHORT).show();
+            resetApp();
+            return;
+        }
 
         // Enabling / disabling detection swaps the main video renderer. Handing the
         // decoder a different surface at runtime would need the receiver lifecycle in
