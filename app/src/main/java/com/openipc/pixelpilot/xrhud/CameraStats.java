@@ -6,51 +6,43 @@ import androidx.annotation.Nullable;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
 
 /**
- * Camera health, fetched from the air unit over the wfb-ng tunnel.
+ * Camera health, pushed by the air unit over the wfb-ng tunnel.
  *
  * <p>None of this arrives as telemetry. Betaflight's MAVLink carries no temperatures at all -
  * verified against its source, where {@code BATTERY_STATUS.temperature} is hardcoded to
- * unknown - so the camera has to be asked directly. It is also the part of an OpenIPC setup
- * that thermally throttles and eventually dies in summer, which makes its temperature the one
- * of the three worth the effort.
+ * unknown - so the camera has to report its own. It is also the part of an OpenIPC setup that
+ * thermally throttles and eventually dies on a hot day, which makes its temperature the one of
+ * the three worth the effort.
  *
- * <p>The transport is the tunnel that already exists: {@code wfb_tun} gives the air unit
- * 10.5.0.10 and the app's own VpnService takes 10.5.0.3, so a plain HTTP GET reaches the
- * camera over the air link - measured at about 18ms round trip.
+ * <p><b>Why this listens rather than fetching.</b> The obvious design is an HTTP GET to the
+ * camera at 10.5.0.10 over the tunnel, and it cannot work: <b>Android excludes a
+ * {@code VpnService} owner from its own tunnel</b>, so this app cannot route to 10.5.0.10 even
+ * though a shell on the same headset reaches it in 13ms. Measured both ways - the shell gets
+ * HTTP 200, the app times out on connect, at 1500ms and at 4000ms alike. Pushing inverts the
+ * direction, and an inbound packet delivered to a bound socket is not route filtered, so this
+ * works where fetching cannot.
  *
- * <p>A file rather than a CGI on the other end, because majestic answers 500 for every CGI
- * there, haserl included, even for a one-line block - static files it serves happily. See
- * {@code /usr/bin/pixelpilot-status} and the {@code busybox httpd} line in
- * {@code /etc/rc.local} on the camera.
+ * <p>The camera end is {@code /usr/bin/pixelpilot-status}, started from {@code /etc/rc.local},
+ * which sends a short key=value block every two seconds with a two second connect timeout so
+ * it never blocks while nothing is listening.
  */
 public final class CameraStats {
 
     private static final String TAG = "pixelpilot";
-    /*
-     * Port 8080, not 80. Majestic - which is the web server on the camera - answers 401
-     * for anything that is not localhost, so going through it would mean shipping the
-     * camera password in the app. Instead a busybox httpd serves one directory holding
-     * one file, unauthenticated and read-only, and nothing else is exposed.
-     */
-    private static final String URL_TEXT = "http://10.5.0.10:8080/pixelpilot.txt";
 
-    /** The camera publishes every two seconds, so asking faster only costs air time. */
-    private static final long POLL_MS = 5000;
-
-    /**
-     * Generous on purpose. This is a TCP handshake across a lossy wireless tunnel, and the
-     * initial retransmit timeout alone is about a second - measured, a 1500ms limit failed
-     * every time while the same request with six seconds succeeded. Still under the poll
-     * interval, so a stalled request cannot pile up behind the next one.
-     */
-    private static final int TIMEOUT_MS = 4000;
+    /** Where the camera pushes to. Must match the nc line in pixelpilot-status. */
+    private static final int PORT = 9099;
 
     /** Older than this and the reading is not shown as if it were current. */
     public static final long STALE_MS = 12000;
+
+    /** Bounded so a stopped listener shuts down promptly instead of blocking in accept(). */
+    private static final int ACCEPT_TIMEOUT_MS = 1000;
 
     public static final class Snapshot {
         public boolean fresh;
@@ -65,7 +57,8 @@ public final class CameraStats {
     private volatile Snapshot latest = new Snapshot();
     private volatile long latestAt;
     private volatile boolean running;
-    private int failures;
+    @Nullable
+    private volatile ServerSocket server;
     @Nullable
     private Thread thread;
 
@@ -74,13 +67,20 @@ public final class CameraStats {
             return;
         }
         running = true;
-        thread = new Thread(this::loop, "CameraStats");
+        thread = new Thread(this::listen, "CameraStats");
         thread.setDaemon(true);
         thread.start();
     }
 
     public void stop() {
         running = false;
+        final ServerSocket s = server;
+        if (s != null) {
+            try {
+                s.close();  // unblocks a waiting accept() at once
+            } catch (Exception ignored) {
+            }
+        }
         final Thread t = thread;
         if (t != null) {
             t.interrupt();
@@ -94,83 +94,76 @@ public final class CameraStats {
         return s;
     }
 
-    private void loop() {
-        while (running) {
-            final Snapshot s = fetch();
-            if (s != null) {
-                latest = s;
-                latestAt = System.currentTimeMillis();
-                failures = 0;
+    private void listen() {
+        try (ServerSocket ss = new ServerSocket(PORT)) {
+            ss.setSoTimeout(ACCEPT_TIMEOUT_MS);
+            server = ss;
+            Log.i(TAG, "camera stats listening on " + PORT);
+            while (running) {
+                try (Socket client = ss.accept()) {
+                    client.setSoTimeout(3000);
+                    final Snapshot s = read(client);
+                    if (s != null) {
+                        latest = s;
+                        latestAt = System.currentTimeMillis();
+                    }
+                } catch (SocketTimeoutException e) {
+                    // Nothing pushed in the last second, which is normal with the link down.
+                } catch (Exception e) {
+                    if (running) {
+                        Log.i(TAG, "camera stats read failed: " + e);
+                    }
+                }
             }
-            try {
-                Thread.sleep(POLL_MS);
-            } catch (InterruptedException e) {
-                return;
-            }
+        } catch (Exception e) {
+            // A port already in use is worth saying out loud: it would mean no camera
+            // readings at all, silently, for the whole session.
+            Log.e(TAG, "camera stats listener could not start on " + PORT, e);
+        } finally {
+            server = null;
         }
     }
 
     @Nullable
-    private Snapshot fetch() {
-        HttpURLConnection conn = null;
-        try {
-            conn = (HttpURLConnection) new URL(URL_TEXT).openConnection();
-            conn.setConnectTimeout(TIMEOUT_MS);
-            conn.setReadTimeout(TIMEOUT_MS);
-            conn.setUseCaches(false);
-            if (conn.getResponseCode() != 200) {
-                return null;
-            }
-            final Snapshot s = new Snapshot();
-            try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
-                String line;
-                while ((line = r.readLine()) != null) {
-                    final int eq = line.indexOf('=');
-                    if (eq <= 0) {
-                        continue;
-                    }
-                    final String k = line.substring(0, eq);
-                    final String v = line.substring(eq + 1).trim();
-                    switch (k) {
-                        case "temp_c":
-                            s.tempC = parseFloat(v);
-                            break;
-                        case "cpu_pct":
-                            s.cpuPct = parseInt(v);
-                            break;
-                        case "mem_used_mb":
-                            s.memUsedMb = parseInt(v);
-                            break;
-                        case "mem_total_mb":
-                            s.memTotalMb = parseInt(v);
-                            break;
-                        case "tx_kbit":
-                            s.txKbit = parseInt(v);
-                            break;
-                        case "uptime_s":
-                            s.uptimeS = parseInt(v);
-                            break;
-                        default:
-                            // An unknown key is a newer camera script, not an error.
-                            break;
-                    }
+    private Snapshot read(Socket client) throws Exception {
+        final Snapshot s = new Snapshot();
+        boolean any = false;
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(client.getInputStream()))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                final int eq = line.indexOf('=');
+                if (eq <= 0) {
+                    continue;
                 }
-            }
-            return s;
-        } catch (Exception e) {
-            // Expected whenever the link is down or the camera has no publisher installed, so
-            // this reports the first failure and then every tenth - noisy enough to diagnose,
-            // quiet enough to leave running. The earlier version guarded on the value it was
-            // about to set and so never logged at all.
-            if (failures++ % 10 == 0) {
-                Log.i(TAG, "camera stats unreachable (" + failures + "): " + e);
-            }
-            return null;
-        } finally {
-            if (conn != null) {
-                conn.disconnect();
+                final String k = line.substring(0, eq);
+                final String v = line.substring(eq + 1).trim();
+                switch (k) {
+                    case "temp_c":
+                        s.tempC = parseFloat(v);
+                        break;
+                    case "cpu_pct":
+                        s.cpuPct = parseInt(v);
+                        break;
+                    case "mem_used_mb":
+                        s.memUsedMb = parseInt(v);
+                        break;
+                    case "mem_total_mb":
+                        s.memTotalMb = parseInt(v);
+                        break;
+                    case "tx_kbit":
+                        s.txKbit = parseInt(v);
+                        break;
+                    case "uptime_s":
+                        s.uptimeS = parseInt(v);
+                        break;
+                    default:
+                        // An unknown key is a newer camera script, not an error.
+                        continue;
+                }
+                any = true;
             }
         }
+        return any ? s : null;
     }
 
     private static float parseFloat(String s) {
