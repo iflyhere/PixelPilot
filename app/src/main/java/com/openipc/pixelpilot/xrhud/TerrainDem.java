@@ -18,9 +18,18 @@ import java.io.File;
  * range would only ever cover takeoff and landing anyway. A height model covers the whole
  * flight and works with no connection, which is the situation this app is used in.
  *
- * <p>Terrain-RGB packs the elevation into the colour channels:
- * {@code -10000 + (R * 65536 + G * 256 + B) * 0.1} metres. That is a Mapbox convention that
- * MapLibre and most tile generators emit, and it decodes to a real number with no library.
+ * <p>Elevation is packed into the colour channels, and there are two incompatible conventions
+ * in the wild - a file in the wrong one decodes to plausible-looking nonsense rather than
+ * failing, so the file has to say which it is, in an {@code encoding} metadata key:
+ *
+ * <ul>
+ *   <li><b>terrarium</b>: {@code (R * 256 + G + B / 256) - 32768} metres. What the AWS open
+ *       data terrain tiles carry, which is the source that needs no account.
+ *   <li><b>mapbox</b> (terrain-rgb): {@code -10000 + (R * 65536 + G * 256 + B) * 0.1} metres.
+ * </ul>
+ *
+ * <p>Terrarium is the default for a file that does not say, because that is what the tooling
+ * in this repository produces.
  */
 public final class TerrainDem implements AutoCloseable {
 
@@ -31,6 +40,7 @@ public final class TerrainDem implements AutoCloseable {
 
     private final MbTiles tiles;
     private final int zoom;
+    private final boolean terrarium;
     private final LruCache<Long, Bitmap> cache = new LruCache<Long, Bitmap>(CACHE_TILES) {
         @Override
         protected void entryRemoved(boolean evicted, Long key, Bitmap old, Bitmap now) {
@@ -43,6 +53,12 @@ public final class TerrainDem implements AutoCloseable {
 
     private TerrainDem(MbTiles tiles) {
         this.tiles = tiles;
+        final String enc = tiles.meta("encoding", "terrarium").toLowerCase();
+        // Anything but an explicit mapbox/terrain-rgb marker is read as terrarium.
+        this.terrarium = !(enc.contains("mapbox") || enc.contains("terrain-rgb")
+                || enc.contains("terrainrgb"));
+        Log.i(TAG, "terrain: " + (terrarium ? "terrarium" : "mapbox") + " encoding, zoom "
+                + tiles.maxZoom());
         // The highest zoom the file has: elevation is read pointwise, so there is nothing to
         // gain from a coarser tile and a lot to lose in a valley.
         this.zoom = tiles.maxZoom();
@@ -52,7 +68,7 @@ public final class TerrainDem implements AutoCloseable {
         opts.inDither = false;
     }
 
-    /** Opens a terrain-rgb MBTiles, or null when the file is unusable. */
+    /** Opens a terrain MBTiles, or null when the file is unusable. */
     @Nullable
     public static TerrainDem open(File file) {
         final MbTiles t = MbTiles.open(file);
@@ -89,7 +105,9 @@ public final class TerrainDem implements AutoCloseable {
         final int r = (c >> 16) & 0xFF;
         final int g = (c >> 8) & 0xFF;
         final int b = c & 0xFF;
-        return (float) (-10000.0 + (r * 65536.0 + g * 256.0 + b) * 0.1);
+        return terrarium
+                ? (float) (r * 256.0 + g + b / 256.0 - 32768.0)
+                : (float) (-10000.0 + (r * 65536.0 + g * 256.0 + b) * 0.1);
     }
 
     @Nullable

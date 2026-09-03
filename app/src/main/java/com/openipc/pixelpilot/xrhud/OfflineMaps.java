@@ -153,6 +153,6 @@ public final class OfflineMaps {
         lastMapLat = s.homeLat;
         lastMapLon = s.homeLon;
         lastMapSpan = span;
-        map.setBasemap(bmp, span);
+        map.setBasemap(bmp, span, renderer.attribution());
     }
 }

@@ -16,7 +16,7 @@ import java.util.Map;
  *
  * <p>MBTiles is a SQLite database with a {@code tiles(zoom_level, tile_column, tile_row,
  * tile_data)} table, so Android can open it with nothing added - the blobs are ordinary PNG or
- * JPEG for a raster set, or terrain-rgb for a height model. That is the whole reason this is
+ * JPEG for a raster set, or elevation packed into the channels for a height model. That is
  * hand-rolled rather than delegated to a map engine: a 640px minimap redrawn twice a second
  * needs a handful of tiles decoded onto a Canvas, and a vector renderer would be ten to
  * fifteen megabytes per ABI and a second GL context for the privilege.
@@ -82,6 +82,12 @@ public final class MbTiles implements AutoCloseable {
             Log.e(TAG, "cannot open " + file.getName() + " as mbtiles", e);
             return null;
         }
+    }
+
+    /** A metadata value, or {@code fallback} when the file does not carry the key. */
+    public String meta(String key, String fallback) {
+        final String v = metadata.get(key);
+        return (v == null || v.isEmpty()) ? fallback : v;
     }
 
     public String format() {

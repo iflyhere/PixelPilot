@@ -21,7 +21,7 @@ import java.io.OutputStream;
  * {@link #importFrom} being something to call off the main thread.
  *
  * <p>Two files, because they answer different questions and are usually produced separately: a
- * raster basemap to look at, and a terrain-rgb height model to measure against. Either can be
+ * raster basemap to look at, and a raster height model to measure against. Either can be
  * absent; the minimap falls back to the track alone and the chart to height above the arming
  * point.
  */

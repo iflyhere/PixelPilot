@@ -56,6 +56,14 @@ public final class BasemapRenderer implements AutoCloseable {
     }
 
     /**
+     * What the map file says it must be credited as, empty when it says nothing. Both sources
+     * {@code scripts/build_offline_maps.py} can fetch require attribution.
+     */
+    public String attribution() {
+        return tiles.meta("attribution", "");
+    }
+
+    /**
      * Renders a north-up square of {@code spanMetres} centred on the given position.
      *
      * <p>Call from a worker thread: it decodes several tiles. Returns null when the file covers

@@ -47,6 +47,9 @@ public final class XrMinimap extends XrOverlay {
     @Nullable
     private volatile Bitmap basemap;
     private volatile float basemapSpanM;
+    /** Shown in a corner whenever a basemap is drawn - see {@link #setBasemap}. */
+    @Nullable
+    private volatile String basemapCredit;
 
     /** Metres from the middle of the map to its edge. */
     private volatile float rangeM = 120f;
@@ -62,10 +65,17 @@ public final class XrMinimap extends XrOverlay {
     /**
      * A rendered basemap covering {@code spanMetres} across, centred on home, north up.
      * Null clears it and leaves the track on its own.
+     *
+     * <p>{@code credit} is drawn in a corner while the basemap is shown. Both sources the
+     * build script can fetch require attribution - basemap.de is dl-de/by-2-0 - so this is
+     * not decoration, and it is taken from the file rather than hardcoded so a map from
+     * somewhere else credits the right people.
      */
-    public void setBasemap(@Nullable Bitmap bitmap, float spanMetres) {
+    public void setBasemap(@Nullable Bitmap bitmap, float spanMetres,
+                           @Nullable String credit) {
         basemap = bitmap;
         basemapSpanM = spanMetres;
+        basemapCredit = credit;
     }
 
     public void setRange(float metres) {
@@ -105,6 +115,21 @@ public final class XrMinimap extends XrOverlay {
         north(canvas, cx, cy, r);
         label(canvas, String.format(Locale.US, "%.0f m", rangeM), cx, cy + r - u * 0.35f,
                 Paint.Align.CENTER);
+        credit(canvas);
+    }
+
+    /** The map's attribution, in the corner the round card leaves empty anyway. */
+    private void credit(Canvas canvas) {
+        final String c = basemapCredit;
+        if (c == null || c.isEmpty() || basemap == null) {
+            return;
+        }
+        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(INK_DIM);
+        p.setTextSize(u * 0.26f);
+        p.setTextAlign(Paint.Align.RIGHT);
+        canvas.drawText(c, width - u * 0.15f, height - u * 0.18f, p);
     }
 
     private void drawBasemap(Canvas canvas, float cx, float cy, float r,
