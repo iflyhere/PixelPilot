@@ -22,14 +22,21 @@ import java.net.URL;
  * 10.5.0.10 and the app's own VpnService takes 10.5.0.3, so a plain HTTP GET reaches the
  * camera over the air link - measured at about 18ms round trip.
  *
- * <p>A file rather than a CGI on the other end, because majestic is the web server there and
- * it answers 500 for every CGI, haserl included; static files it serves happily. See
- * {@code /usr/bin/pixelpilot-status} on the camera.
+ * <p>A file rather than a CGI on the other end, because majestic answers 500 for every CGI
+ * there, haserl included, even for a one-line block - static files it serves happily. See
+ * {@code /usr/bin/pixelpilot-status} and the {@code busybox httpd} line in
+ * {@code /etc/rc.local} on the camera.
  */
 public final class CameraStats {
 
     private static final String TAG = "pixelpilot";
-    private static final String URL_TEXT = "http://10.5.0.10/pixelpilot.txt";
+    /*
+     * Port 8080, not 80. Majestic - which is the web server on the camera - answers 401
+     * for anything that is not localhost, so going through it would mean shipping the
+     * camera password in the app. Instead a busybox httpd serves one directory holding
+     * one file, unauthenticated and read-only, and nothing else is exposed.
+     */
+    private static final String URL_TEXT = "http://10.5.0.10:8080/pixelpilot.txt";
 
     /** The camera publishes every two seconds, so asking faster only costs air time. */
     private static final long POLL_MS = 3000;
@@ -53,6 +60,7 @@ public final class CameraStats {
     private volatile Snapshot latest = new Snapshot();
     private volatile long latestAt;
     private volatile boolean running;
+    private int failures;
     @Nullable
     private Thread thread;
 
@@ -87,6 +95,7 @@ public final class CameraStats {
             if (s != null) {
                 latest = s;
                 latestAt = System.currentTimeMillis();
+                failures = 0;
             }
             try {
                 Thread.sleep(POLL_MS);
@@ -144,11 +153,12 @@ public final class CameraStats {
             }
             return s;
         } catch (Exception e) {
-            // Expected whenever the link is down or the camera has no publisher installed;
-            // logged once in a while rather than every three seconds.
-            if (latestAt != 0) {
-                Log.d(TAG, "camera stats unreachable: " + e.getMessage());
-                latestAt = 0;
+            // Expected whenever the link is down or the camera has no publisher installed, so
+            // this reports the first failure and then every tenth - noisy enough to diagnose,
+            // quiet enough to leave running. The earlier version guarded on the value it was
+            // about to set and so never logged at all.
+            if (failures++ % 10 == 0) {
+                Log.i(TAG, "camera stats unreachable (" + failures + "): " + e);
             }
             return null;
         } finally {
