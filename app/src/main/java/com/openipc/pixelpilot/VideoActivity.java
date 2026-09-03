@@ -105,6 +105,8 @@ public class VideoActivity extends LinkClientActivity
     private static final int PICK_KEY_REQUEST_CODE = 1;
     private static final int PICK_DVR_REQUEST_CODE = 2;
     private static final int PICK_BASEMAP_REQUEST_CODE = 3;
+    /** Set in onCreate before the super, so the bind can be skipped. See onCreate. */
+    private boolean standingAside;
     private static final int PICK_TERRAIN_REQUEST_CODE = 4;
     private static final int PICK_MODEL_REQUEST_CODE = 3;
     private static final String MODEL_LITE0_FILE = "efficientdet-lite0.tflite";
@@ -298,13 +300,17 @@ public class VideoActivity extends LinkClientActivity
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         Log.d(TAG, "lifecycle onCreate");
+        // Decided before the super, because the super is what binds the service: replugging
+        // the adapter used to crash the app here. The USB_DEVICE_ATTACHED filter is on this
+        // activity, so a replug starts it even while the immersive activity owns the link;
+        // it bound, finished without ever building its views, and the bind still completed -
+        // at which point the service replayed its last status into a null binding.
+        standingAside = XrVideoActivity.isActive()
+                && UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(getIntent().getAction());
         super.onCreate(savedInstanceState);
 
-        // The USB_DEVICE_ATTACHED filter is on this activity, so replugging the adapter
-        // starts it even while the immersive activity owns the link. Two activities fighting
-        // over one adapter and one decoder means neither gets video, so step aside.
-        if (XrVideoActivity.isActive()
-                && UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(getIntent().getAction())) {
+        // Two activities fighting over one adapter and one decoder means neither gets video.
+        if (standingAside) {
             Log.i(TAG, "adapter attached while the immersive session is running, staying out of it");
             finish();
             return;
@@ -1775,6 +1781,11 @@ public class VideoActivity extends LinkClientActivity
 
     @Override
     public void onVideoResolution(final int videoW, final int videoH) {
+        // Same reason as onLinkStatus: addClient() replays state the moment it is
+        // called, and a finishing activity has no views.
+        if (binding == null) {
+            return;
+        }
         lastVideoW = videoW;
         lastVideoH = videoH;
 
@@ -1804,6 +1815,11 @@ public class VideoActivity extends LinkClientActivity
 
     @Override
     public void onDecodingInfo(final DecodingInfo decodingInfo) {
+        // Same reason as onLinkStatus: addClient() replays state the moment it is
+        // called, and a finishing activity has no views.
+        if (binding == null) {
+            return;
+        }
         mDecodingInfo = decodingInfo;
         runOnUiThread(() -> {
             if (lastCodec != decodingInfo.nCodec) {
@@ -1825,6 +1841,11 @@ public class VideoActivity extends LinkClientActivity
 
     @Override
     public void onWfbStats(WfbNGStats data) {
+        // Same reason as onLinkStatus: addClient() replays state the moment it is
+        // called, and a finishing activity has no views.
+        if (binding == null) {
+            return;
+        }
         runOnUiThread(() -> {
             if (data.count_p_all > 0) {
                 binding.tvMessage.setVisibility(View.INVISIBLE);
@@ -1891,8 +1912,18 @@ public class VideoActivity extends LinkClientActivity
     }
 
     @Override
+    protected boolean shouldAttachToLink() {
+        return !standingAside;
+    }
+
+    @Override
     public void onLinkStatus(String message) {
         runOnUiThread(() -> {
+            // A service callback can outrun or outlive the views: addClient() replays the
+            // last state as soon as it is called, and the activity may be finishing.
+            if (binding == null) {
+                return;
+            }
             binding.tvMessage.setVisibility(View.VISIBLE);
             binding.tvMessage.setText(message);
         });

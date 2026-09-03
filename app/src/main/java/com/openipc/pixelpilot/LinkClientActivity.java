@@ -49,6 +49,19 @@ public abstract class LinkClientActivity extends AppCompatActivity implements Li
     /** Called on the main thread once the link is available. */
     protected abstract void onLinkServiceConnected(LinkService service);
 
+    /**
+     * Whether to attach to the service at all.
+     *
+     * <p>A subclass that decides in {@code onCreate} that it should not run - stepping aside
+     * for the other mode, say - has to say so before the bind, not after. Binding and then
+     * finishing still delivers {@link #onServiceConnected}, and the service replays its last
+     * state to a new client, so the callbacks would land on an activity that never built its
+     * views.
+     */
+    protected boolean shouldAttachToLink() {
+        return true;
+    }
+
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -56,6 +69,11 @@ public abstract class LinkClientActivity extends AppCompatActivity implements Li
         // Started as well as bound, so it keeps running while no activity is attached - that
         // is what carries the link across a mode switch.
         startForegroundService(intent);
+        if (!shouldAttachToLink()) {
+            // Still started, so the link survives; deliberately not bound.
+            Log.i(TAG, "not attaching to the link service, this activity is standing aside");
+            return;
+        }
         bound = bindService(intent, connection, Context.BIND_AUTO_CREATE);
         if (!bound) {
             Log.e(TAG, "could not bind the link service");
