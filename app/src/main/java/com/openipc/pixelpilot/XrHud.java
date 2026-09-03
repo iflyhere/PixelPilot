@@ -48,6 +48,36 @@ final class XrHud {
     private static final int COL_ALERT = Color.rgb(255, 95, 95);
     private static final int COL_HORIZON = Color.rgb(150, 220, 255);
 
+    /*
+     * MavlinkData carries whatever the native decoder happened to store, which is neither SI
+     * nor internally consistent - so the conversions live here, named, rather than as
+     * literals scattered through the drawing code. Checked against the flight controller.
+     *
+     *   telemetryBattery          millivolts
+     *   telemetryCurrent          centiamps
+     *   telemetryCurrentConsumed  mAh, already
+     *   telemetryAltitude         centimetres, biased by +100000
+     *   telemetryGSpeed/VSpeed    cm/s, biased by +100000
+     *   telemetryDistance         centimetres
+     *   telemetryLat/Lon          degrees x 1e7
+     *   telemetryPitch/Roll/Yaw   degrees, already
+     *
+     * The +100000 bias is how the flat OSD tells "zero" apart from "never received".
+     */
+    private static final float BIAS = 100000f;
+
+    private static float volts(MavlinkData t) {
+        return t.telemetryBattery / 1000f;
+    }
+
+    private static float amps(MavlinkData t) {
+        return t.telemetryCurrent / 100f;
+    }
+
+    private static float metres(float biasedCm) {
+        return (biasedCm - BIAS) / 100f;
+    }
+
     private final Surface surface;
     private final int width;
     private final int height;
@@ -157,8 +187,9 @@ final class XrHud {
         if (fresh) {
             drawHorizon(canvas, cx, cy, unit, t);
             drawHeading(canvas, cx, unit, t);
-            drawTape(canvas, unit * 2.2f, cy, unit, t.telemetryAltitude, "ALT", "m", true);
-            drawTape(canvas, width - unit * 2.2f, cy, unit, t.telemetryGSpeed, "SPD", "m/s", false);
+            drawTape(canvas, unit * 2.2f, cy, unit, metres(t.telemetryAltitude), "ALT", "m", true);
+            drawTape(canvas, width - unit * 2.2f, cy, unit, metres(t.telemetryGSpeed), "SPD", "m/s", false);
+            drawThrottle(canvas, cx, cy, unit, t);
             drawBattery(canvas, unit, height - unit * 1.2f, unit, t);
             drawSats(canvas, cx, height - unit * 0.8f, unit, t);
             drawHome(canvas, cx, cy, unit, t);
@@ -277,17 +308,18 @@ final class XrHud {
     }
 
     private void drawBattery(Canvas canvas, float x, float y, float unit, MavlinkData t) {
-        final float volts = t.telemetryBattery;
-        // Per-cell is the number that means something across pack sizes; 6S at 19.9V is fine,
-        // 4S at 19.9V is not, and only the cell count tells them apart.
-        final int cells = volts > 21f ? 6 : volts > 14f ? 4 : volts > 7f ? 2 : 1;
-        final float perCell = cells > 0 ? volts / cells : volts;
+        final float v = volts(t);
+        // Per-cell is the number that means something across pack sizes: 19.9V is a healthy
+        // 6S and a nearly flat 4S, and only the cell count tells them apart. Guessed from the
+        // voltage, which is unambiguous because the usable ranges do not overlap.
+        final int cells = v > 21f ? 6 : v > 14f ? 4 : v > 7f ? 2 : 1;
+        final float perCell = v / cells;
         final int colour = perCell < 3.5f ? COL_ALERT : perCell < 3.7f ? COL_WARN : COL_PRIMARY;
 
-        text(canvas, String.format(Locale.US, "%.2fV", volts), x, y, unit * 0.7f, colour,
+        text(canvas, String.format(Locale.US, "%.2fV", v), x, y, unit * 0.7f, colour,
                 Paint.Align.LEFT);
-        text(canvas, String.format(Locale.US, "%.2fV/cell  %.1fA  %.0fmAh", perCell,
-                        t.telemetryCurrent, t.telemetryCurrentConsumed),
+        text(canvas, String.format(Locale.US, "%.2fV/cell %dS  %.1fA  %.0fmAh", perCell, cells,
+                        amps(t), t.telemetryCurrentConsumed),
                 x, y + unit * 0.55f, unit * 0.36f, colour, Paint.Align.LEFT);
     }
 
@@ -298,13 +330,20 @@ final class XrHud {
                 cx, y, unit * 0.36f, fix ? COL_PRIMARY : COL_WARN, Paint.Align.CENTER);
     }
 
-    /** Direction and distance home, as an arrow relative to where the nose is pointing. */
+    /**
+     * Direction and distance home, as an arrow relative to where the nose is pointing.
+     *
+     * <p>The bearing is computed here rather than read from {@code telemetryHdg}: the native
+     * decoder passes that field through to Java but never assigns it, so it is always zero
+     * and an arrow built on it would point one fixed way for the whole flight.
+     */
     private void drawHome(Canvas canvas, float cx, float cy, float unit, MavlinkData t) {
-        if (t.gps_fix_type < 3 || t.telemetryDistance < 1) {
+        if (t.gps_fix_type < 3 || t.telemetryDistance < 100
+                || (t.telemetryLatBase == 0 && t.telemetryLonBase == 0)) {
             return;
         }
         final float y = cy + unit * 5.5f;
-        final double rel = Math.toRadians(t.telemetryHdg - t.telemetryYaw);
+        final double rel = Math.toRadians(bearingHome(t) - t.telemetryYaw);
 
         canvas.save();
         canvas.translate(cx, y);
@@ -320,8 +359,36 @@ final class XrHud {
         canvas.drawPath(path, line);
         canvas.restore();
 
-        text(canvas, String.format(Locale.US, "%.0fm", t.telemetryDistance),
+        text(canvas, String.format(Locale.US, "%.0fm", t.telemetryDistance / 100f),
                 cx, y + unit * 1.25f, unit * 0.4f, COL_ACCENT, Paint.Align.CENTER);
+    }
+
+    /** Initial great-circle bearing from the craft back to where it armed, in degrees. */
+    private static double bearingHome(MavlinkData t) {
+        final double lat = Math.toRadians(t.telemetryLat / 1e7);
+        final double lon = Math.toRadians(t.telemetryLon / 1e7);
+        final double latH = Math.toRadians(t.telemetryLatBase / 1e7);
+        final double lonH = Math.toRadians(t.telemetryLonBase / 1e7);
+        final double dLon = lonH - lon;
+        final double y = Math.sin(dLon) * Math.cos(latH);
+        final double x =
+                Math.cos(lat) * Math.sin(latH) - Math.sin(lat) * Math.cos(latH) * Math.cos(dLon);
+        return Math.toDegrees(Math.atan2(y, x));
+    }
+
+    /** Throttle as a thin bar under the reticle - the position reads faster than the number. */
+    private void drawThrottle(Canvas canvas, float cx, float cy, float unit, MavlinkData t) {
+        final float pct = Math.max(0f, Math.min(100f, t.telemetryThrottle));
+        final float w = unit * 3.2f;
+        final float y = cy + unit * 4.4f;
+        stroke(unit * 0.05f, COL_PRIMARY);
+        seg(canvas, cx - w / 2f, y, cx + w / 2f, y);
+        if (pct > 0.5f) {
+            stroke(unit * 0.14f, COL_ACCENT);
+            seg(canvas, cx - w / 2f, y, cx - w / 2f + w * pct / 100f, y);
+        }
+        text(canvas, String.format(Locale.US, "THR %.0f%%", pct), cx, y - unit * 0.28f,
+                unit * 0.32f, COL_PRIMARY, Paint.Align.CENTER);
     }
 
     private void drawLink(Canvas canvas, float x, float y, float unit) {
@@ -331,7 +398,8 @@ final class XrHud {
         }
         final int colour = s.count_p_lost > 0 ? COL_ALERT
                 : s.count_p_fec_recovered > 0 ? COL_WARN : COL_PRIMARY;
-        text(canvas, String.format(Locale.US, "%d dBm", s.avg_rssi), x, y,
+        // avg_rssi is a 0..100 figure here, not dBm - the flat OSD colours it at 30 and 60.
+        text(canvas, String.format(Locale.US, "link %d", s.avg_rssi), x, y,
                 unit * 0.36f, colour, Paint.Align.RIGHT);
         text(canvas, String.format(Locale.US, "fec %d   lost %d", s.count_p_fec_recovered,
                 s.count_p_lost), x, y + unit * 0.5f, unit * 0.36f, colour, Paint.Align.RIGHT);
