@@ -52,6 +52,12 @@ WfbngLink::WfbngLink(JNIEnv *env, jobject context)
         : current_fd(-1), adaptive_link_enabled(true), adaptive_tx_power(30) {
     initAgg();
     log = std::make_shared<Logger>(); // routes to logcat under the "devourer" tag
+    // Logger defaults to Level::Debug, and devourer's TX path logs four debug lines for every
+    // frame it sends. Measured on a Quest 3 at 20MHz: ~255 lines/s, 10182 of 14405 lines in a
+    // 40 second logcat capture - enough to push everything else out of the ring buffer within
+    // half a minute, which makes the log useless for diagnosing anything else. Each line also
+    // costs an ostringstream and a logd write on the packet path.
+    log->set_level(Logger::Level::Info);
     wifi_driver = std::make_unique<WiFiDriver>(log);
 }
 
@@ -612,6 +618,13 @@ extern "C" JNIEXPORT void JNICALL Java_com_openipc_wfbngrtl8812_WfbNgLink_native
                                                                                            jint use) {
     WfbngLink *link = native(wfbngLinkN);
     link->stbc_enabled = (use != 0);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_com_openipc_wfbngrtl8812_WfbNgLink_nativeSetVerboseLog(
+    JNIEnv *env, jclass clazz, jlong nativeInstance, jboolean enabled) {
+    WfbngLink *link = reinterpret_cast<WfbngLink *>(nativeInstance);
+    if (!link) return;
+    link->set_log_verbose(enabled);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_com_openipc_wfbngrtl8812_WfbNgLink_nativeSetFecThresholds(

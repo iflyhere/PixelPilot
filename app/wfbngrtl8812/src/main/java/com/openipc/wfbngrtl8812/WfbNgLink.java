@@ -20,6 +20,20 @@ public class WfbNgLink implements WfbNGStatsChanged {
     // Set FEC thresholds for switching levels (Java wrapper and JNI)
     public static native void nativeSetFecThresholds(long nativeInstance, int lostTo5, int recTo4, int recTo3, int recTo2, int recTo1);
 
+    private static native void nativeSetVerboseLog(long nativeInstance, boolean enabled);
+
+    /**
+     * Turns devourer's per-frame debug logging on. Off by default because it emits roughly
+     * 255 lines a second, which empties the logcat ring buffer of everything else in about
+     * half a minute - the opposite of useful when something needs diagnosing.
+     *
+     * <p>Takes effect from the next {@link #start}: the driver's logger is documented as
+     * being configured before its worker threads start, without synchronisation.
+     */
+    public void setVerboseLog(boolean enabled) {
+        nativeSetVerboseLog(nativeWfbngLink, enabled);
+    }
+
     public void setFecThresholds(int lostTo5, int recTo4, int recTo3, int recTo2, int recTo1) {
         nativeSetFecThresholds(nativeWfbngLink, lostTo5, recTo4, recTo3, recTo2, recTo1);
     }

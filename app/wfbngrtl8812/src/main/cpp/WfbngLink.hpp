@@ -41,6 +41,18 @@ class WfbngLink {
 
     void stop(JNIEnv *env, jobject androidContext, jint fd);
 
+    /**
+     * Driver debug logging. Off means Level::Info, which drops devourer's four debug
+     * lines per transmitted frame - about 255 a second, enough to empty the logcat ring
+     * buffer of everything else in half a minute.
+     *
+     * Logger is documented as being configured before its worker threads spawn, with
+     * unsynchronized fields, so this only takes effect from the next run().
+     */
+    void set_log_verbose(bool enabled) {
+        if (log) log->set_level(enabled ? Logger::Level::Debug : Logger::Level::Info);
+    }
+
     std::mutex agg_mutex;
     std::unique_ptr<AggregatorUDPv4> video_aggregator;
     std::unique_ptr<AggregatorUDPv4> mavlink_aggregator;

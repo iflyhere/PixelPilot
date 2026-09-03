@@ -44,6 +44,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public class LinkService extends Service implements LinkStatusView, IVideoParamsChanged, WfbNGStatsChanged {
 
+    /** Driver debug logging; off by default, see WfbNgLink.setVerboseLog(). */
+    static final String PREF_VERBOSE_DRIVER_LOG = "verbose_driver_log";
+
     public static final String ACTION_STOP = "com.openipc.pixelpilot.LINK_STOP";
 
     private static final String TAG = "pixelpilot";
@@ -113,6 +116,8 @@ public class LinkService extends Service implements LinkStatusView, IVideoParams
 
         wfbLink = new WfbNgLink(this);
         wfbLink.SetWfbNGStatsChanged(this);
+        wfbLink.setVerboseLog(getSharedPreferences("general", MODE_PRIVATE)
+                .getBoolean(PREF_VERBOSE_DRIVER_LOG, false));
         // Not read by the native side on its own: adaptive link, TX power, FEC/LDPC/STBC.
         WfbOptions.applyDefaults(this, wfbLink);
 
@@ -332,6 +337,13 @@ public class LinkService extends Service implements LinkStatusView, IVideoParams
     public void setUdpForwarding(String ip, int port, boolean enabled) {
         if (videoPlayer != null) {
             videoPlayer.setUdpForwarding(ip, port, enabled);
+        }
+    }
+
+    /** Driver debug logging. Applied by the driver from its next start, not immediately. */
+    public void setVerboseLog(boolean enabled) {
+        if (wfbLink != null) {
+            wfbLink.setVerboseLog(enabled);
         }
     }
 

@@ -939,6 +939,25 @@ public class VideoActivity extends LinkClientActivity
      */
     private void setupWFBSubMenu(PopupMenu popup) {
         SubMenu wfb = popup.getMenu().addSubMenu("WFB-NG key");
+
+        MenuItem verbose = wfb.add("Verbose driver log");
+        verbose.setCheckable(true);
+        SharedPreferences prefs = getSharedPreferences("general", MODE_PRIVATE);
+        verbose.setChecked(prefs.getBoolean(LinkService.PREF_VERBOSE_DRIVER_LOG, false));
+        verbose.setOnMenuItemClickListener(item -> {
+            boolean enabled = !item.isChecked();
+            item.setChecked(enabled);
+            prefs.edit().putBoolean(LinkService.PREF_VERBOSE_DRIVER_LOG, enabled).apply();
+            if (link != null) {
+                link.setVerboseLog(enabled);
+            }
+            Toast.makeText(this, "Driver log " + (enabled ? "verbose" : "quiet")
+                    + ", applies on next adapter start.", Toast.LENGTH_SHORT).show();
+            item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
+            item.setActionView(new View(this));
+            return false;
+        });
+
         MenuItem keyBtn = wfb.add("gs.key");
         keyBtn.setOnMenuItemClickListener(item -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
