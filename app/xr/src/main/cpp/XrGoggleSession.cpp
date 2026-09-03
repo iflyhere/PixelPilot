@@ -347,6 +347,10 @@ bool XrGoggleSession::createInstance(JNIEnv* env, jobject activity)
     mHasHandInteraction = extensionSupported(XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
     // Needed to correct the origin of an Android-produced image, see renderFrame().
     mHasImageLayout = extensionSupported(XR_FB_COMPOSITION_LAYER_IMAGE_LAYOUT_EXTENSION_NAME);
+    // Lets the dashboard wrap around the pilot instead of being a flat card. The curve is
+    // itself a depth cue - it gives parallax across the width - and without the extension the
+    // same layer is submitted as a plain quad, which only looks flatter.
+    mHasCylinder = extensionSupported(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
     // Thumb swipes along the index finger: a discrete control that does not occupy the
     // hand, so pinch and grasp stay free for the flight actions.
     mHasMicrogestures = mHasHandInteraction &&
@@ -360,19 +364,21 @@ bool XrGoggleSession::createInstance(JNIEnv* env, jobject activity)
     if (mHasRefreshRate) enabled.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     if (mHasHandInteraction) enabled.push_back(XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
     if (mHasImageLayout) enabled.push_back(XR_FB_COMPOSITION_LAYER_IMAGE_LAYOUT_EXTENSION_NAME);
+    if (mHasCylinder) enabled.push_back(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
     if (mHasMicrogestures) enabled.push_back(XR_META_HAND_TRACKING_MICROGESTURES_EXTENSION_NAME);
     if (mHasSimultaneous)
         enabled.push_back(XR_META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME);
     LOGI(
         "optional extensions: passthrough=%d layerSettings=%d refreshRate=%d handInteraction=%d "
-        "imageLayout=%d microgestures=%d simultaneousHandsControllers=%d",
+        "imageLayout=%d microgestures=%d simultaneousHandsControllers=%d cylinder=%d",
         (int) mHasPassthrough,
         (int) mHasLayerSettings,
         (int) mHasRefreshRate,
         (int) mHasHandInteraction,
         (int) mHasImageLayout,
         (int) mHasMicrogestures,
-        (int) mHasSimultaneous);
+        (int) mHasSimultaneous,
+        (int) mHasCylinder);
 
     JavaVM* vm = nullptr;
     env->GetJavaVM(&vm);
@@ -646,19 +652,110 @@ bool XrGoggleSession::createSurfaceSwapchain(
     return check(last, "xrCreateSwapchainAndroidSurfaceKHR");
 }
 
+/*
+ * Where each overlay sits. Angles are relative to the middle of the video, so the whole
+ * arrangement follows the panel when it is moved or re-centred.
+ *
+ * The pixel sizes are chosen for the angle each layer subtends rather than for their own sake:
+ * a layer that covers twice the angle needs twice the pixels to read equally sharp.
+ */
+namespace
+{
+
+XrQuaternionf quatMul(const XrQuaternionf& a, const XrQuaternionf& b)
+{
+    return XrQuaternionf{a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+                         a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                         a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+                         a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+
+XrQuaternionf quatAboutY(float rad)
+{
+    return XrQuaternionf{0.0f, std::sin(rad * 0.5f), 0.0f, std::cos(rad * 0.5f)};
+}
+
+XrQuaternionf quatAboutX(float rad)
+{
+    return XrQuaternionf{std::sin(rad * 0.5f), 0.0f, 0.0f, std::cos(rad * 0.5f)};
+}
+
+/** v rotated by q, written out rather than going through a matrix. */
+XrVector3f quatRotate(const XrQuaternionf& q, const XrVector3f& v)
+{
+    const float tx = 2.0f * (q.y * v.z - q.z * v.y);
+    const float ty = 2.0f * (q.z * v.x - q.x * v.z);
+    const float tz = 2.0f * (q.x * v.y - q.y * v.x);
+    return XrVector3f{v.x + q.w * tx + (q.y * tz - q.z * ty),
+                      v.y + q.w * ty + (q.z * tx - q.x * tz),
+                      v.z + q.w * tz + (q.x * ty - q.y * tx)};
+}
+
+constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+
+}  // namespace
+
+void XrGoggleSession::describeOverlays()
+{
+    OverlayLayer& sym = mOverlays[OVERLAY_SYMBOLOGY];
+    sym.name          = "symbology";
+    sym.width         = 2048;
+    sym.height        = 1152;
+    // Deliberately no offsets: horizon and reticle only mean anything if they sit exactly
+    // where the image sits.
+    sym.distance = 0.0f;
+    sym.widthM   = 0.0f;
+
+    OverlayLayer& dash    = mOverlays[OVERLAY_DASHBOARD];
+    dash.name             = "dashboard";
+    dash.width            = 2560;
+    dash.height           = 640;
+    dash.pitchDeg         = -29.0f;  // just below the video's bottom edge
+    dash.distance         = 1.40f;
+    dash.cylinder         = true;
+    dash.centralAngleDeg  = 58.0f;
+    dash.aspect           = 0.25f;  // height / width
+
+    OverlayLayer& map = mOverlays[OVERLAY_MINIMAP];
+    map.name          = "minimap";
+    map.width         = 768;
+    map.height        = 768;
+    map.yawDeg        = -35.0f;
+    map.pitchDeg      = -31.0f;
+    map.tiltDeg       = 30.0f;  // laid back, like a nav screen on a dash
+    map.distance      = 1.20f;
+    map.widthM        = 0.60f;
+
+    OverlayLayer& chart = mOverlays[OVERLAY_CHART];
+    chart.name          = "chart";
+    chart.width         = 1024;
+    chart.height        = 576;
+    chart.yawDeg        = 35.0f;
+    chart.pitchDeg      = -31.0f;
+    chart.tiltDeg       = 30.0f;
+    chart.distance      = 1.20f;
+    chart.widthM        = 0.74f;
+}
+
 bool XrGoggleSession::createSwapchain(JNIEnv* env)
 {
     if (!createSurfaceSwapchain(env, mSwapchainWidth, mSwapchainHeight, "video", &mSwapchain, &mVideoSurface))
     {
         return false;
     }
-    // The HUD is a bonus, not a requirement: a runtime that hands out only one surface
-    // swapchain still gets video, just without an overlay.
-    if (!createSurfaceSwapchain(env, kHudWidth, kHudHeight, "hud", &mHudSwapchain, &mHudSurface))
+
+    describeOverlays();
+    for (int i = 0; i < OVERLAY_COUNT; ++i)
     {
-        LOGW("no hud swapchain - running without the overlay layer");
-        mHudSwapchain = XR_NULL_HANDLE;
-        mHudSurface   = nullptr;
+        OverlayLayer& o = mOverlays[i];
+        // Every overlay is a bonus, not a requirement: a runtime that runs out of surface
+        // swapchains still flies, just with fewer instruments.
+        if (!createSurfaceSwapchain(env, o.width, o.height, o.name, &o.swapchain, &o.surface))
+        {
+            LOGW("no swapchain for the %s layer - carrying on without it", o.name);
+            o.swapchain = XR_NULL_HANDLE;
+            o.surface   = nullptr;
+        }
     }
     return true;
 }
@@ -1466,28 +1563,95 @@ void XrGoggleSession::renderFrame(JNIEnv* env, jobject listener)
     }
     quad.size = XrExtent2Df{widthM, widthM * aspect};
 
-    // Same width and pose as the video, but always 16:9 so the canvas is never stretched,
-    // and a centimetre nearer. Quad layers composite in submission order, so the nudge is
-    // belt and braces for a runtime that sorts by depth instead.
-    XrCompositionLayerQuad hud{XR_TYPE_COMPOSITION_LAYER_QUAD};
-    if (mHudSwapchain != XR_NULL_HANDLE)
+    // The overlays orbit the point the video quad hangs from, so moving or re-centring the
+    // panel takes the whole instrument arrangement with it.
+    const XrQuaternionf baseOri =
+        headLocked ? XrQuaternionf{0.0f, 0.0f, 0.0f, 1.0f} : mAnchorPose.orientation;
+    const XrVector3f origin =
+        headLocked ? XrVector3f{0.0f, heightOffset, 0.0f}
+                   : XrVector3f{mAnchorPose.position.x,
+                                mAnchorPose.position.y + heightOffset,
+                                mAnchorPose.position.z};
+
+    // Straight alpha, because Canvas hands out straight alpha: whatever an overlay leaves
+    // transparent has to show what is behind it rather than blacken it.
+    static constexpr XrCompositionLayerFlags kOverlayFlags =
+        XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT |
+        XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+
+    XrCompositionLayerImageLayoutFB overlayLayout{XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB};
+    overlayLayout.flags = XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
+    void* const overlayNext = mHasImageLayout ? &overlayLayout : nullptr;
+
+    XrCompositionLayerQuad          overlayQuads[OVERLAY_COUNT];
+    XrCompositionLayerCylinderKHR   overlayCyls[OVERLAY_COUNT];
+    bool                            overlayIsCylinder[OVERLAY_COUNT] = {false};
+    bool                            overlayReady[OVERLAY_COUNT]      = {false};
+
+    for (int i = 0; i < OVERLAY_COUNT; ++i)
     {
-        XrCompositionLayerImageLayoutFB hudLayout{XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB};
-        hudLayout.flags = XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
-        hud.next        = mHasImageLayout ? &hudLayout : nullptr;
-        // Unpremultiplied: Canvas hands out straight alpha, so anything the HUD leaves
-        // transparent has to show the video through rather than blacken it.
-        hud.layerFlags = XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT |
-                         XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-        hud.space                    = quad.space;
-        hud.eyeVisibility            = XR_EYE_VISIBILITY_BOTH;
-        hud.subImage.swapchain       = mHudSwapchain;
-        hud.subImage.imageArrayIndex = 0;
-        hud.subImage.imageRect.offset = XrOffset2Di{0, 0};
-        hud.subImage.imageRect.extent = XrExtent2Di{kHudWidth, kHudHeight};
-        hud.pose = quad.pose;
-        hud.pose.position.z += 0.01f;
-        hud.size = XrExtent2Df{widthM, widthM * (float) kHudHeight / (float) kHudWidth};
+        const OverlayLayer& o = mOverlays[i];
+        if (o.swapchain == XR_NULL_HANDLE || !o.visible.load())
+        {
+            continue;
+        }
+
+        const float dist = o.distance > 0.0f ? o.distance : mQuadDistance.load();
+        // Direction first, then the panel is laid back in its own frame - so the tilt changes
+        // how it faces without moving where it is.
+        const XrQuaternionf facing =
+            quatMul(quatMul(baseOri, quatAboutY(o.yawDeg * kDeg2Rad)), quatAboutX(o.pitchDeg * kDeg2Rad));
+        const XrVector3f offset = quatRotate(facing, XrVector3f{0.0f, 0.0f, -dist});
+
+        XrPosef pose{};
+        pose.orientation = quatMul(facing, quatAboutX(o.tiltDeg * kDeg2Rad));
+        pose.position    = XrVector3f{origin.x + offset.x, origin.y + offset.y, origin.z + offset.z};
+
+        const XrSwapchainSubImage sub{o.swapchain, {{0, 0}, {o.width, o.height}}, 0};
+
+        if (o.cylinder && mHasCylinder)
+        {
+            XrCompositionLayerCylinderKHR& c = overlayCyls[i];
+            c              = XrCompositionLayerCylinderKHR{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+            c.next         = overlayNext;
+            c.layerFlags   = kOverlayFlags;
+            c.space        = quad.space;
+            c.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+            c.subImage     = sub;
+            c.pose         = pose;
+            c.radius       = dist;
+            c.centralAngle = o.centralAngleDeg * kDeg2Rad;
+            // aspectRatio is width over height of the visible rectangle.
+            c.aspectRatio  = o.aspect > 0.0f ? 1.0f / o.aspect : (float) o.width / (float) o.height;
+            overlayIsCylinder[i] = true;
+        }
+        else
+        {
+            // A curved layer asked for on a runtime without the extension falls back to flat,
+            // which only looks less dimensional.
+            const float w =
+                o.widthM > 0.0f ? o.widthM
+                                : (o.cylinder ? dist * o.centralAngleDeg * kDeg2Rad : widthM);
+            const float h = w * (o.aspect > 0.0f ? o.aspect : (float) o.height / (float) o.width);
+
+            XrCompositionLayerQuad& q = overlayQuads[i];
+            q               = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+            q.next          = overlayNext;
+            q.layerFlags    = kOverlayFlags;
+            q.space         = quad.space;
+            q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+            q.subImage      = sub;
+            q.pose          = pose;
+            q.size          = XrExtent2Df{w, h};
+            // The symbology sits exactly on the video, so nudge it a centimetre nearer.
+            // Layers composite in submission order anyway; this is for a runtime that sorts
+            // by depth instead.
+            if (i == OVERLAY_SYMBOLOGY)
+            {
+                q.pose.position.z += 0.01f;
+            }
+        }
+        overlayReady[i] = true;
     }
 
     XrCompositionLayerPassthroughFB passthroughLayer{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
@@ -1495,16 +1659,22 @@ void XrGoggleSession::renderFrame(JNIEnv* env, jobject listener)
     passthroughLayer.space       = XR_NULL_HANDLE;
     passthroughLayer.layerHandle = mPassthroughLayer;
 
-    const XrCompositionLayerBaseHeader* layers[3];
+    const XrCompositionLayerBaseHeader* layers[2 + OVERLAY_COUNT];
     uint32_t                            layerCount = 0;
     if (wantPassthrough)
     {
         layers[layerCount++] = (const XrCompositionLayerBaseHeader*) &passthroughLayer;
     }
     layers[layerCount++] = (const XrCompositionLayerBaseHeader*) &quad;
-    if (mHudSwapchain != XR_NULL_HANDLE && mHudVisible.load())
+    for (int i = 0; i < OVERLAY_COUNT; ++i)
     {
-        layers[layerCount++] = (const XrCompositionLayerBaseHeader*) &hud;
+        if (!overlayReady[i])
+        {
+            continue;
+        }
+        layers[layerCount++] = overlayIsCylinder[i]
+                                   ? (const XrCompositionLayerBaseHeader*) &overlayCyls[i]
+                                   : (const XrCompositionLayerBaseHeader*) &overlayQuads[i];
     }
 
     XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
@@ -1543,15 +1713,19 @@ void XrGoggleSession::destroy(JNIEnv* env)
         xrDestroyActionSet(mActionSet);
         mActionSet = XR_NULL_HANDLE;
     }
-    if (mHudSwapchain != XR_NULL_HANDLE)
+    for (int i = 0; i < OVERLAY_COUNT; ++i)
     {
-        xrDestroySwapchain(mHudSwapchain);
-        mHudSwapchain = XR_NULL_HANDLE;
-    }
-    if (mHudSurface != nullptr)
-    {
-        env->DeleteGlobalRef(mHudSurface);
-        mHudSurface = nullptr;
+        OverlayLayer& o = mOverlays[i];
+        if (o.swapchain != XR_NULL_HANDLE)
+        {
+            xrDestroySwapchain(o.swapchain);
+            o.swapchain = XR_NULL_HANDLE;
+        }
+        if (o.surface != nullptr)
+        {
+            env->DeleteGlobalRef(o.surface);
+            o.surface = nullptr;
+        }
     }
     if (mSwapchain != XR_NULL_HANDLE)
     {

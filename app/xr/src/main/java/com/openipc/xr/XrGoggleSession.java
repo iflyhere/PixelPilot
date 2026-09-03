@@ -35,9 +35,18 @@ public final class XrGoggleSession {
 
     private static final String TAG = "pixelpilot-xr";
 
-    /** Size of the HUD layer's canvas. Keep in sync with kHudWidth/kHudHeight in the header. */
-    public static final int HUD_WIDTH = 2048;
-    public static final int HUD_HEIGHT = 1152;
+    /**
+     * The overlay layers, each its own compositor layer at its own distance and angle - which
+     * is what makes them read as having depth. Keep in sync with the enum in the header.
+     *
+     * <p>{@link #OVERLAY_SYMBOLOGY} is flat and sits exactly on the video; the rest are placed
+     * around it and their canvas sizes come from the runtime, so nothing here has to guess.
+     */
+    public static final int OVERLAY_SYMBOLOGY = 0;
+    public static final int OVERLAY_DASHBOARD = 1;
+    public static final int OVERLAY_MINIMAP = 2;
+    public static final int OVERLAY_CHART = 3;
+    public static final int OVERLAY_COUNT = 4;
 
     private static boolean libraryLoaded;
 
@@ -57,13 +66,15 @@ public final class XrGoggleSession {
         void onXrReady(Surface videoSurface);
 
         /**
-         * A second, transparent quad layer in front of the video, for the HUD. Composited at
-         * panel resolution rather than drawn into the encoded stream, so the text stays sharp.
+         * One of the transparent overlay layers is ready to be drawn into. Called once per
+         * layer the runtime granted, on the main thread, with the canvas size to draw at.
          *
-         * <p>Not called when the runtime would not hand out a second surface swapchain -
-         * video still works, there is just no overlay.
+         * <p>A layer the runtime refused is simply never announced - video still works, there
+         * are just fewer instruments.
+         *
+         * @param id one of the {@code OVERLAY_*} constants
          */
-        void onXrHudReady(Surface hudSurface);
+        void onXrOverlayReady(int id, Surface surface, int width, int height);
 
         /** One of the BUTTON_* constants was pressed on a controller. */
         void onXrButton(int button);
@@ -190,11 +201,16 @@ public final class XrGoggleSession {
         }
         main.post(() -> listener.onXrReady(surface));
 
-        final Surface hud = nativeGetHudSurface(h);
-        if (hud != null) {
-            main.post(() -> listener.onXrHudReady(hud));
-        } else {
-            Log.w(TAG, "no hud layer available from this runtime");
+        for (int id = 0; id < OVERLAY_COUNT; id++) {
+            final Surface overlay = nativeGetOverlaySurface(h, id);
+            if (overlay == null) {
+                Log.w(TAG, "overlay layer " + id + " not available from this runtime");
+                continue;
+            }
+            final int oid = id;
+            final int ow = nativeGetOverlayWidth(h, id);
+            final int oh = nativeGetOverlayHeight(h, id);
+            main.post(() -> listener.onXrOverlayReady(oid, overlay, ow, oh));
         }
 
         // Blocks until stop() or an unrecoverable runtime error. Button presses arrive
@@ -247,10 +263,10 @@ public final class XrGoggleSession {
         if (handle != 0) nativeSetSharpening(handle, enabled);
     }
 
-    /** Submits or drops the HUD layer. Takes effect on the next frame. */
-    public void setHudVisible(boolean visible) {
+    /** Submits or drops one overlay layer. Takes effect on the next frame. */
+    public void setOverlayVisible(int id, boolean visible) {
         if (handle != 0) {
-            nativeSetHudVisible(handle, visible);
+            nativeSetOverlayVisible(handle, id, visible);
         }
     }
 
@@ -305,9 +321,13 @@ public final class XrGoggleSession {
 
     private static native Surface nativeGetVideoSurface(long handle);
 
-    private static native Surface nativeGetHudSurface(long handle);
+    private static native Surface nativeGetOverlaySurface(long handle, int id);
 
-    private static native void nativeSetHudVisible(long handle, boolean visible);
+    private static native int nativeGetOverlayWidth(long handle, int id);
+
+    private static native int nativeGetOverlayHeight(long handle, int id);
+
+    private static native void nativeSetOverlayVisible(long handle, int id, boolean visible);
 
     private static native void nativeRunLoop(long handle, XrGoggleSession listener);
 

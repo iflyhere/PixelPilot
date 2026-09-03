@@ -68,10 +68,50 @@ class XrGoggleSession
      *
      * Null when the runtime would not give us a second surface swapchain.
      */
-    jobject hudSurface() const { return mHudSurface; }
+    /**
+     * The overlay layers, each its own compositor layer with its own pose.
+     *
+     * <p>Depth in a headset comes from parallax, not from painted shadows - a bevel on a flat
+     * plane reads as a bevel on a flat plane, because the stereo pair contradicts it. So the
+     * instruments are separate layers at separate distances and angles, and the runtime
+     * renders each one per eye from its own pose.
+     *
+     * <p>SYMBOLOGY has to stay a flat quad exactly over the video: the reticle and the horizon
+     * are only meaningful if they sit where the image sits, and on a curved layer they would
+     * drift off the video centre towards the edges. The rest is free, so the dashboard wraps
+     * around the pilot and the map and the chart lie back like instruments on a panel.
+     */
+    enum Overlay
+    {
+        OVERLAY_SYMBOLOGY = 0,
+        OVERLAY_DASHBOARD,
+        OVERLAY_MINIMAP,
+        OVERLAY_CHART,
+        OVERLAY_COUNT
+    };
 
-    /** Whether the HUD layer is submitted at all. Off costs nothing per frame. */
-    void setHudVisible(bool visible) { mHudVisible.store(visible); }
+    /** Producer side of an overlay layer, or null if the runtime would not give us one. */
+    jobject overlaySurface(int id) const
+    {
+        return (id >= 0 && id < OVERLAY_COUNT) ? mOverlays[id].surface : nullptr;
+    }
+
+    int overlayWidth(int id) const
+    {
+        return (id >= 0 && id < OVERLAY_COUNT) ? mOverlays[id].width : 0;
+    }
+
+    int overlayHeight(int id) const
+    {
+        return (id >= 0 && id < OVERLAY_COUNT) ? mOverlays[id].height : 0;
+    }
+
+    /** Drops a layer from the frame. Off costs nothing per frame. */
+    void setOverlayVisible(int id, bool visible)
+    {
+        if (id >= 0 && id < OVERLAY_COUNT) mOverlays[id].visible.store(visible);
+    }
+
 
     std::string lastError();
 
@@ -115,6 +155,7 @@ class XrGoggleSession
     bool createSwapchain(JNIEnv* env);
     bool createSurfaceSwapchain(
         JNIEnv* env, int width, int height, const char* what, XrSwapchain* outSwapchain, jobject* outSurface);
+    void describeOverlays();
     bool createActions();
     bool createPassthrough();
 
@@ -143,8 +184,31 @@ class XrGoggleSession
     XrSpace    mLocalSpace = XR_NULL_HANDLE;
     XrSwapchain mSwapchain  = XR_NULL_HANDLE;
     jobject     mVideoSurface = nullptr;
-    XrSwapchain mHudSwapchain = XR_NULL_HANDLE;
-    jobject     mHudSurface   = nullptr;
+    struct OverlayLayer
+    {
+        // Producer side.
+        XrSwapchain swapchain = XR_NULL_HANDLE;
+        jobject     surface   = nullptr;
+        int         width     = 0;
+        int         height    = 0;
+
+        // Placement, relative to where the video quad sits. Angles in degrees.
+        float yawDeg          = 0.0f;  // positive to the right
+        float pitchDeg        = 0.0f;  // positive up
+        float tiltDeg         = 0.0f;  // about its own X, to lay a panel back
+        float distance        = 0.0f;  // metres; 0 means "same as the video"
+        float widthM          = 0.0f;  // metres; 0 means "same as the video"
+        float aspect          = 0.0f;  // height/width; 0 means "from the pixel size"
+        bool  cylinder        = false;
+        float centralAngleDeg = 0.0f;
+
+        std::atomic<bool> visible{true};
+        const char*       name = "";
+    };
+
+    OverlayLayer mOverlays[OVERLAY_COUNT];
+    bool         mHasCylinder = false;
+
 
     XrPassthroughFB      mPassthrough      = XR_NULL_HANDLE;
     XrPassthroughLayerFB mPassthroughLayer = XR_NULL_HANDLE;
@@ -206,12 +270,7 @@ class XrGoggleSession
     std::atomic<int>   mVideoHeight{1080};
     int                mSwapchainWidth  = 1920;
     int                mSwapchainHeight = 1080;
-    // The HUD is text and thin lines, so it wants pixels where the video wants none: at
-    // 1.6m the video quad is about 1.6m wide, and 2048 across keeps a 24px glyph legible.
-    static constexpr int kHudWidth  = 2048;
-    static constexpr int kHudHeight = 1152;
     std::atomic<float> mQuadDistance{1.6f};
-    std::atomic<bool>  mHudVisible{true};
     std::atomic<float> mQuadWidth{2.2f};
     std::atomic<float> mQuadHeightOffset{0.0f};
     std::atomic<bool>  mHeadLocked{true};

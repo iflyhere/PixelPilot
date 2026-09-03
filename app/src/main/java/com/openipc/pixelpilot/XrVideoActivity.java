@@ -28,6 +28,12 @@ import android.widget.Toast;
 import androidx.annotation.Nullable;
 
 import com.openipc.mavlink.MavlinkData;
+import com.openipc.pixelpilot.xrhud.FlightData;
+import com.openipc.pixelpilot.xrhud.XrChart;
+import com.openipc.pixelpilot.xrhud.XrDashboard;
+import com.openipc.pixelpilot.xrhud.XrMinimap;
+import com.openipc.pixelpilot.xrhud.XrOverlay;
+import com.openipc.pixelpilot.xrhud.XrSymbology;
 import com.openipc.wfbngrtl8812.WfbNGStats;
 import com.openipc.xr.XrGoggleSession;
 
@@ -122,8 +128,12 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private XrGoggleSession xr;
+    /** What every instrument reads. Written from the main thread, read from their threads. */
+    private final FlightData flightData = new FlightData();
+    /** One entry per OVERLAY_* id; null where the runtime granted no layer. */
+    private final XrOverlay[] overlays = new XrOverlay[XrGoggleSession.OVERLAY_COUNT];
     @Nullable
-    private XrHud hud;
+    private XrDashboard dashboard;
     private TextView statusView;
 
     // The flat activity may still be releasing the USB interface when we get here, so the
@@ -233,10 +243,13 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         if (link != null) {
             link.detachSurface(0);
         }
-        if (hud != null) {
-            hud.stop();
-            hud = null;
+        for (int i = 0; i < overlays.length; i++) {
+            if (overlays[i] != null) {
+                overlays[i].stop();
+                overlays[i] = null;
+            }
         }
+        dashboard = null;
         if (xr != null) {
             xr.release();
             xr = null;
@@ -357,27 +370,41 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     }
 
     @Override
-    public void onXrHudReady(Surface hudSurface) {
-        Log.i(TAG, "hud layer up");
-        hud = new XrHud(hudSurface, XrGoggleSession.HUD_WIDTH, XrGoggleSession.HUD_HEIGHT);
-        hud.setNote(dvrFd != null ? "REC" : "");
-        hud.start();
-        if (link != null) {
-            // Replay whatever the service already has, so the instruments are populated
-            // before the next telemetry packet rather than a second later.
-            WfbNGStats stats = lastStats;
-            if (stats != null) {
-                hud.onLink(stats);
-            }
+    public void onXrOverlayReady(int id, Surface surface, int width, int height) {
+        Log.i(TAG, "overlay layer " + id + " up, " + width + "x" + height);
+        final XrOverlay overlay;
+        switch (id) {
+            case XrGoggleSession.OVERLAY_SYMBOLOGY:
+                overlay = new XrSymbology(surface, width, height, flightData);
+                break;
+            case XrGoggleSession.OVERLAY_DASHBOARD:
+                dashboard = new XrDashboard(surface, width, height, flightData);
+                dashboard.setNote(dvrFd != null ? "REC" : "");
+                overlay = dashboard;
+                break;
+            case XrGoggleSession.OVERLAY_MINIMAP:
+                overlay = new XrMinimap(surface, width, height, flightData);
+                break;
+            case XrGoggleSession.OVERLAY_CHART:
+                overlay = new XrChart(surface, width, height, flightData);
+                break;
+            default:
+                Log.w(TAG, "unknown overlay id " + id);
+                return;
         }
+        overlays[id] = overlay;
+        // Replay what the service already has, so an instrument is populated as it appears
+        // rather than a packet later.
+        WfbNGStats stats = lastStats;
+        if (stats != null) {
+            flightData.onLink(stats);
+        }
+        overlay.start();
     }
 
     @Override
     public void onMavlink(MavlinkData data) {
-        XrHud h = hud;
-        if (h != null) {
-            h.onTelemetry(data);
-        }
+        flightData.onTelemetry(data);
     }
 
     @Override
@@ -604,10 +631,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     @Override
     public void onWfbStats(WfbNGStats data) {
         lastStats = data;
-        XrHud h = hud;
-        if (h != null) {
-            h.onLink(data);
-        }
+        flightData.onLink(data);
         // Without this there is no way to tell "the adapter is dead" from "the link is fine
         // but nothing decodes" while wearing the headset.
         final long nowMs = System.currentTimeMillis();

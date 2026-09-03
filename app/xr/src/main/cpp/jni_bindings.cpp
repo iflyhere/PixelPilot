@@ -57,18 +57,33 @@ JNI_METHOD(jobject, nativeGetVideoSurface)(JNIEnv* env, jclass clazz, jlong hand
     return native(handle)->videoSurface();
 }
 
-JNI_METHOD(jobject, nativeGetHudSurface)(JNIEnv* env, jclass clazz, jlong handle)
+JNI_METHOD(jobject, nativeGetOverlaySurface)(JNIEnv* env, jclass clazz, jlong handle, jint id)
 {
     (void) env;
     (void) clazz;
-    return native(handle)->hudSurface();
+    return native(handle)->overlaySurface(id);
 }
 
-JNI_METHOD(void, nativeSetHudVisible)(JNIEnv* env, jclass clazz, jlong handle, jboolean visible)
+JNI_METHOD(jint, nativeGetOverlayWidth)(JNIEnv* env, jclass clazz, jlong handle, jint id)
 {
     (void) env;
     (void) clazz;
-    native(handle)->setHudVisible(visible == JNI_TRUE);
+    return native(handle)->overlayWidth(id);
+}
+
+JNI_METHOD(jint, nativeGetOverlayHeight)(JNIEnv* env, jclass clazz, jlong handle, jint id)
+{
+    (void) env;
+    (void) clazz;
+    return native(handle)->overlayHeight(id);
+}
+
+JNI_METHOD(void, nativeSetOverlayVisible)
+(JNIEnv* env, jclass clazz, jlong handle, jint id, jboolean visible)
+{
+    (void) env;
+    (void) clazz;
+    native(handle)->setOverlayVisible(id, visible == JNI_TRUE);
 }
 
 JNI_METHOD(void, nativeRunLoop)(JNIEnv* env, jclass clazz, jlong handle, jobject listener)
