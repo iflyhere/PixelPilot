@@ -60,6 +60,19 @@ class XrGoggleSession
     // destroy().
     jobject videoSurface() const { return mVideoSurface; }
 
+    /**
+     * Producer side of a second, transparent quad layer for the HUD. Kept separate from
+     * the video so the overlay is composited at panel resolution rather than being drawn
+     * into a stream that has already been through an encoder - and so it can be redrawn
+     * at its own rate without touching the decoder's swapchain.
+     *
+     * Null when the runtime would not give us a second surface swapchain.
+     */
+    jobject hudSurface() const { return mHudSurface; }
+
+    /** Whether the HUD layer is submitted at all. Off costs nothing per frame. */
+    void setHudVisible(bool visible) { mHudVisible.store(visible); }
+
     std::string lastError();
 
     std::vector<float> refreshRates();
@@ -100,6 +113,8 @@ class XrGoggleSession
     bool createSession();
     bool createSpaces();
     bool createSwapchain(JNIEnv* env);
+    bool createSurfaceSwapchain(
+        JNIEnv* env, int width, int height, const char* what, XrSwapchain* outSwapchain, jobject* outSurface);
     bool createActions();
     bool createPassthrough();
 
@@ -128,6 +143,8 @@ class XrGoggleSession
     XrSpace    mLocalSpace = XR_NULL_HANDLE;
     XrSwapchain mSwapchain  = XR_NULL_HANDLE;
     jobject     mVideoSurface = nullptr;
+    XrSwapchain mHudSwapchain = XR_NULL_HANDLE;
+    jobject     mHudSurface   = nullptr;
 
     XrPassthroughFB      mPassthrough      = XR_NULL_HANDLE;
     XrPassthroughLayerFB mPassthroughLayer = XR_NULL_HANDLE;
@@ -189,7 +206,12 @@ class XrGoggleSession
     std::atomic<int>   mVideoHeight{1080};
     int                mSwapchainWidth  = 1920;
     int                mSwapchainHeight = 1080;
+    // The HUD is text and thin lines, so it wants pixels where the video wants none: at
+    // 1.6m the video quad is about 1.6m wide, and 2048 across keeps a 24px glyph legible.
+    static constexpr int kHudWidth  = 2048;
+    static constexpr int kHudHeight = 1152;
     std::atomic<float> mQuadDistance{1.6f};
+    std::atomic<bool>  mHudVisible{true};
     std::atomic<float> mQuadWidth{2.2f};
     std::atomic<float> mQuadHeightOffset{0.0f};
     std::atomic<bool>  mHeadLocked{true};

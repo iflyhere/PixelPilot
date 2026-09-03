@@ -27,6 +27,7 @@ import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 
+import com.openipc.mavlink.MavlinkData;
 import com.openipc.wfbngrtl8812.WfbNGStats;
 import com.openipc.xr.XrGoggleSession;
 
@@ -121,6 +122,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private XrGoggleSession xr;
+    @Nullable
+    private XrHud hud;
     private TextView statusView;
 
     // The flat activity may still be releasing the USB interface when we get here, so the
@@ -229,6 +232,10 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         // open across the switch.
         if (link != null) {
             link.detachSurface(0);
+        }
+        if (hud != null) {
+            hud.stop();
+            hud = null;
         }
         if (xr != null) {
             xr.release();
@@ -346,6 +353,30 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
                 break;
             default:
                 break;
+        }
+    }
+
+    @Override
+    public void onXrHudReady(Surface hudSurface) {
+        Log.i(TAG, "hud layer up");
+        hud = new XrHud(hudSurface, XrGoggleSession.HUD_WIDTH, XrGoggleSession.HUD_HEIGHT);
+        hud.setNote(dvrFd != null ? "REC" : "");
+        hud.start();
+        if (link != null) {
+            // Replay whatever the service already has, so the instruments are populated
+            // before the next telemetry packet rather than a second later.
+            WfbNGStats stats = lastStats;
+            if (stats != null) {
+                hud.onLink(stats);
+            }
+        }
+    }
+
+    @Override
+    public void onMavlink(MavlinkData data) {
+        XrHud h = hud;
+        if (h != null) {
+            h.onTelemetry(data);
         }
     }
 
@@ -573,6 +604,10 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     @Override
     public void onWfbStats(WfbNGStats data) {
         lastStats = data;
+        XrHud h = hud;
+        if (h != null) {
+            h.onLink(data);
+        }
         // Without this there is no way to tell "the adapter is dead" from "the link is fine
         // but nothing decodes" while wearing the headset.
         final long nowMs = System.currentTimeMillis();

@@ -571,7 +571,8 @@ bool XrGoggleSession::createSpaces()
  * accepted. The zeroed shape is therefore first; the rest stay as a fallback for a runtime
  * that wants something else, and the accepted one is logged.
  */
-bool XrGoggleSession::createSwapchain(JNIEnv* env)
+bool XrGoggleSession::createSurfaceSwapchain(
+    JNIEnv* env, int width, int height, const char* what, XrSwapchain* outSwapchain, jobject* outSurface)
 {
     // GL_RGBA8, for the variant where the runtime wants a real format.
     constexpr int64_t kGlRgba8 = 0x8058;
@@ -602,31 +603,28 @@ bool XrGoggleSession::createSwapchain(JNIEnv* env)
         info.usageFlags  = variant.usage;
         info.format      = variant.format;
         info.sampleCount = variant.counts;
-        info.width       = (uint32_t) mSwapchainWidth;
-        info.height      = (uint32_t) mSwapchainHeight;
+        info.width       = (uint32_t) width;
+        info.height      = (uint32_t) height;
         info.faceCount   = variant.counts;
         info.arraySize   = variant.counts;
         info.mipCount    = variant.counts;
 
         surface = nullptr;
-        last    = mXrCreateSwapchainAndroidSurfaceKHR(mSession, &info, &mSwapchain, &surface);
+        last    = mXrCreateSwapchainAndroidSurfaceKHR(mSession, &info, outSwapchain, &surface);
         if (XR_SUCCEEDED(last) && surface != nullptr)
         {
-            LOGI("android surface swapchain %dx%d created (%s)",
-                 mSwapchainWidth,
-                 mSwapchainHeight,
-                 variant.what);
-            mVideoSurface = env->NewGlobalRef(surface);
+            LOGI("%s surface swapchain %dx%d created (%s)", what, width, height, variant.what);
+            *outSurface = env->NewGlobalRef(surface);
             return true;
         }
         char name[XR_MAX_RESULT_STRING_SIZE] = {0};
         xrResultToString(mInstance, last, name);
-        LOGW("swapchain variant \'%s\' rejected: %s", variant.what, name);
-        if (XR_SUCCEEDED(last) && mSwapchain != XR_NULL_HANDLE)
+        LOGW("%s swapchain variant %s rejected: %s", what, variant.what, name);
+        if (XR_SUCCEEDED(last) && *outSwapchain != XR_NULL_HANDLE)
         {
             // Succeeded but handed back no Surface - not usable, do not leak it.
-            xrDestroySwapchain(mSwapchain);
-            mSwapchain = XR_NULL_HANDLE;
+            xrDestroySwapchain(*outSwapchain);
+            *outSwapchain = XR_NULL_HANDLE;
         }
     }
 
@@ -646,6 +644,23 @@ bool XrGoggleSession::createSwapchain(JNIEnv* env)
         }
     }
     return check(last, "xrCreateSwapchainAndroidSurfaceKHR");
+}
+
+bool XrGoggleSession::createSwapchain(JNIEnv* env)
+{
+    if (!createSurfaceSwapchain(env, mSwapchainWidth, mSwapchainHeight, "video", &mSwapchain, &mVideoSurface))
+    {
+        return false;
+    }
+    // The HUD is a bonus, not a requirement: a runtime that hands out only one surface
+    // swapchain still gets video, just without an overlay.
+    if (!createSurfaceSwapchain(env, kHudWidth, kHudHeight, "hud", &mHudSwapchain, &mHudSurface))
+    {
+        LOGW("no hud swapchain - running without the overlay layer");
+        mHudSwapchain = XR_NULL_HANDLE;
+        mHudSurface   = nullptr;
+    }
+    return true;
 }
 
 XrAction XrGoggleSession::boolAction(const char* name, const char* localized)
@@ -1451,18 +1466,46 @@ void XrGoggleSession::renderFrame(JNIEnv* env, jobject listener)
     }
     quad.size = XrExtent2Df{widthM, widthM * aspect};
 
+    // Same width and pose as the video, but always 16:9 so the canvas is never stretched,
+    // and a centimetre nearer. Quad layers composite in submission order, so the nudge is
+    // belt and braces for a runtime that sorts by depth instead.
+    XrCompositionLayerQuad hud{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    if (mHudSwapchain != XR_NULL_HANDLE)
+    {
+        XrCompositionLayerImageLayoutFB hudLayout{XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB};
+        hudLayout.flags = XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
+        hud.next        = mHasImageLayout ? &hudLayout : nullptr;
+        // Unpremultiplied: Canvas hands out straight alpha, so anything the HUD leaves
+        // transparent has to show the video through rather than blacken it.
+        hud.layerFlags = XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT |
+                         XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        hud.space                    = quad.space;
+        hud.eyeVisibility            = XR_EYE_VISIBILITY_BOTH;
+        hud.subImage.swapchain       = mHudSwapchain;
+        hud.subImage.imageArrayIndex = 0;
+        hud.subImage.imageRect.offset = XrOffset2Di{0, 0};
+        hud.subImage.imageRect.extent = XrExtent2Di{kHudWidth, kHudHeight};
+        hud.pose = quad.pose;
+        hud.pose.position.z += 0.01f;
+        hud.size = XrExtent2Df{widthM, widthM * (float) kHudHeight / (float) kHudWidth};
+    }
+
     XrCompositionLayerPassthroughFB passthroughLayer{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
     passthroughLayer.flags       = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
     passthroughLayer.space       = XR_NULL_HANDLE;
     passthroughLayer.layerHandle = mPassthroughLayer;
 
-    const XrCompositionLayerBaseHeader* layers[2];
+    const XrCompositionLayerBaseHeader* layers[3];
     uint32_t                            layerCount = 0;
     if (wantPassthrough)
     {
         layers[layerCount++] = (const XrCompositionLayerBaseHeader*) &passthroughLayer;
     }
     layers[layerCount++] = (const XrCompositionLayerBaseHeader*) &quad;
+    if (mHudSwapchain != XR_NULL_HANDLE && mHudVisible.load())
+    {
+        layers[layerCount++] = (const XrCompositionLayerBaseHeader*) &hud;
+    }
 
     XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
     endInfo.displayTime          = frameState.predictedDisplayTime;
@@ -1499,6 +1542,16 @@ void XrGoggleSession::destroy(JNIEnv* env)
     {
         xrDestroyActionSet(mActionSet);
         mActionSet = XR_NULL_HANDLE;
+    }
+    if (mHudSwapchain != XR_NULL_HANDLE)
+    {
+        xrDestroySwapchain(mHudSwapchain);
+        mHudSwapchain = XR_NULL_HANDLE;
+    }
+    if (mHudSurface != nullptr)
+    {
+        env->DeleteGlobalRef(mHudSurface);
+        mHudSurface = nullptr;
     }
     if (mSwapchain != XR_NULL_HANDLE)
     {

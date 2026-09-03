@@ -57,6 +57,20 @@ JNI_METHOD(jobject, nativeGetVideoSurface)(JNIEnv* env, jclass clazz, jlong hand
     return native(handle)->videoSurface();
 }
 
+JNI_METHOD(jobject, nativeGetHudSurface)(JNIEnv* env, jclass clazz, jlong handle)
+{
+    (void) env;
+    (void) clazz;
+    return native(handle)->hudSurface();
+}
+
+JNI_METHOD(void, nativeSetHudVisible)(JNIEnv* env, jclass clazz, jlong handle, jboolean visible)
+{
+    (void) env;
+    (void) clazz;
+    native(handle)->setHudVisible(visible == JNI_TRUE);
+}
+
 JNI_METHOD(void, nativeRunLoop)(JNIEnv* env, jclass clazz, jlong handle, jobject listener)
 {
     (void) clazz;

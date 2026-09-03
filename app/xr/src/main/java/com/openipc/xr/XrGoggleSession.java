@@ -35,6 +35,10 @@ public final class XrGoggleSession {
 
     private static final String TAG = "pixelpilot-xr";
 
+    /** Size of the HUD layer's canvas. Keep in sync with kHudWidth/kHudHeight in the header. */
+    public static final int HUD_WIDTH = 2048;
+    public static final int HUD_HEIGHT = 1152;
+
     private static boolean libraryLoaded;
 
     static {
@@ -51,6 +55,15 @@ public final class XrGoggleSession {
     public interface Listener {
         /** The compositor swapchain is ready; hand this Surface to the decoder. */
         void onXrReady(Surface videoSurface);
+
+        /**
+         * A second, transparent quad layer in front of the video, for the HUD. Composited at
+         * panel resolution rather than drawn into the encoded stream, so the text stays sharp.
+         *
+         * <p>Not called when the runtime would not hand out a second surface swapchain -
+         * video still works, there is just no overlay.
+         */
+        void onXrHudReady(Surface hudSurface);
 
         /** One of the BUTTON_* constants was pressed on a controller. */
         void onXrButton(int button);
@@ -177,6 +190,13 @@ public final class XrGoggleSession {
         }
         main.post(() -> listener.onXrReady(surface));
 
+        final Surface hud = nativeGetHudSurface(h);
+        if (hud != null) {
+            main.post(() -> listener.onXrHudReady(hud));
+        } else {
+            Log.w(TAG, "no hud layer available from this runtime");
+        }
+
         // Blocks until stop() or an unrecoverable runtime error. Button presses arrive
         // through onXrButton() below, called from this thread.
         nativeRunLoop(h, this);
@@ -225,6 +245,13 @@ public final class XrGoggleSession {
 
     public void setSharpening(boolean enabled) {
         if (handle != 0) nativeSetSharpening(handle, enabled);
+    }
+
+    /** Submits or drops the HUD layer. Takes effect on the next frame. */
+    public void setHudVisible(boolean visible) {
+        if (handle != 0) {
+            nativeSetHudVisible(handle, visible);
+        }
     }
 
     public void setHeadLocked(boolean enabled) {
@@ -277,6 +304,10 @@ public final class XrGoggleSession {
     private static native boolean nativeCreate(long handle, Activity activity);
 
     private static native Surface nativeGetVideoSurface(long handle);
+
+    private static native Surface nativeGetHudSurface(long handle);
+
+    private static native void nativeSetHudVisible(long handle, boolean visible);
 
     private static native void nativeRunLoop(long handle, XrGoggleSession listener);
 
