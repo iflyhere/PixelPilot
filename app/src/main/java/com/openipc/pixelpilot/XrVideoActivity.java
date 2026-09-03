@@ -28,6 +28,7 @@ import android.widget.Toast;
 import androidx.annotation.Nullable;
 
 import com.openipc.mavlink.MavlinkData;
+import com.openipc.pixelpilot.xrhud.CameraStats;
 import com.openipc.pixelpilot.xrhud.FlightData;
 import com.openipc.pixelpilot.xrhud.OfflineMaps;
 import com.openipc.pixelpilot.xrhud.XrChart;
@@ -139,6 +140,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     private XrDashboard dashboard;
     /** Feeds the terrain profile and the basemap from whatever is installed offline. */
     private final OfflineMaps maps = new OfflineMaps(flightData);
+    /** The air unit's temperature and load, over the tunnel - not telemetry. */
+    private final CameraStats cameraStats = new CameraStats();
     private TextView statusView;
 
     // The flat activity may still be releasing the USB interface when we get here, so the
@@ -252,6 +255,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             link.detachSurface(0);
         }
         maps.stop();
+        cameraStats.stop();
         for (int i = 0; i < overlays.length; i++) {
             if (overlays[i] != null) {
                 overlays[i].stop();
@@ -387,7 +391,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
                 overlay = new XrSymbology(surface, width, height, flightData);
                 break;
             case XrGoggleSession.OVERLAY_DASHBOARD:
-                dashboard = new XrDashboard(surface, width, height, flightData);
+                dashboard = new XrDashboard(surface, width, height, flightData, cameraStats);
+                cameraStats.start();
                 dashboard.setNote(dvrFd != null ? "REC" : "");
                 overlay = dashboard;
                 break;

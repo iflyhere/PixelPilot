@@ -712,12 +712,12 @@ void XrGoggleSession::describeOverlays()
     OverlayLayer& dash   = mOverlays[OVERLAY_DASHBOARD];
     dash.name            = "dashboard";
     dash.width           = 1536;
-    dash.height          = 768;
+    dash.height          = 1152;
     dash.pitchDeg        = -30.0f;
     dash.distance        = 1.40f;
     dash.cylinder        = true;
     dash.centralAngleDeg = 30.0f;
-    dash.aspect          = 0.50f;  // height / width
+    dash.aspect          = 0.75f;  // height / width - three rows, not two
 
     OverlayLayer& map = mOverlays[OVERLAY_MINIMAP];
     map.name          = "minimap";

@@ -22,12 +22,15 @@ import java.util.Locale;
 public final class XrDashboard extends XrOverlay {
 
     private final FlightData data;
+    private final CameraStats camera;
     private String note = "";
 
-    public XrDashboard(Surface surface, int width, int height, FlightData data) {
+    public XrDashboard(Surface surface, int width, int height, FlightData data,
+                       CameraStats camera) {
         // Slower than the symbology: none of these numbers rewards 25Hz.
-        super("XrDashboard", surface, width, height, 9, 100);
+        super("XrDashboard", surface, width, height, 13, 100);
         this.data = data;
+        this.camera = camera;
     }
 
     /** A short line for transient state - recording, a warning, a mode change. */
@@ -40,19 +43,22 @@ public final class XrDashboard extends XrOverlay {
         final FlightData.Snapshot s = data.snapshot();
         final float pad = u * 0.42f;
         final float gap = u * 0.36f;
-        // Two by two. Horizontal room is what the map and the chart beside this need, so the
-        // dashboard takes the vertical instead.
+        // Two columns, three rows. Horizontal room is what the map and the chart beside this
+        // need, so the dashboard grows downwards instead - and the camera row spans both
+        // columns, because its four readings are short and belong together.
         final float cardW = (width - pad * 2 - gap) / 2f;
-        final float cardH = (height - pad * 2 - gap) / 2f;
+        final float cardH = (height - pad * 2 - gap * 2) / 3f;
         final float x0 = pad;
         final float x1 = pad + cardW + gap;
         final float y0 = pad;
-        final float y1 = pad + cardH + gap;
+        final float y1 = y0 + cardH + gap;
+        final float y2 = y1 + cardH + gap;
 
         battery(canvas, x0, y0, x0 + cardW, y0 + cardH, s);
         flight(canvas, x1, y0, x1 + cardW, y0 + cardH, s);
         demand(canvas, x0, y1, x0 + cardW, y1 + cardH, s);
         link(canvas, x1, y1, x1 + cardW, y1 + cardH, s);
+        camera(canvas, x0, y2, x1 + cardW, y2 + cardH);
     }
 
     private void battery(Canvas canvas, float l, float t, float r, float b,
@@ -152,6 +158,48 @@ public final class XrDashboard extends XrOverlay {
             final String sats = s.gpsFix ? s.sats + " sat" : s.sats + " sat no fix";
             label(canvas, sats, (l + r) / 2f, b - u * 0.42f, Paint.Align.CENTER);
         }
+    }
+
+    /**
+     * The air unit's own health, over the tunnel rather than as telemetry.
+     *
+     * <p>Its temperature is the one of the three the pilot asked for that is actually
+     * obtainable: Betaflight's MAVLink sends no temperatures at all. It is also the most
+     * useful of them, because the camera is what throttles and then dies on a hot day.
+     */
+    private void camera(Canvas canvas, float l, float t, float r, float b) {
+        card(canvas, l, t, r, b);
+        final CameraStats.Snapshot c = camera.snapshot();
+        final float pad = u * 0.7f;
+        label(canvas, "camera", l + pad, t + u * 1.0f, Paint.Align.LEFT);
+        if (!c.fresh) {
+            label(canvas, "no tunnel", r - pad, t + u * 1.0f, Paint.Align.RIGHT);
+            return;
+        }
+
+        final float quarter = (r - l - pad * 2) / 4f;
+        final float base = t + (b - t) * 0.78f;
+
+        // The exact throttle point is chip specific, so these are deliberately cautious
+        // rather than precise: 80 is warm for an SSC338Q, 90 is where to start worrying.
+        final int tempColour = Float.isNaN(c.tempC) ? INK_DIM
+                : c.tempC >= 90f ? ALERT : c.tempC >= 80f ? WARN : INK;
+        readout(canvas, l + pad + quarter * 0.5f, base, "soc",
+                Float.isNaN(c.tempC) ? "--" : String.format(Locale.US, "%.0f", c.tempC),
+                "\u00b0C", tempColour);
+
+        final int cpuColour = c.cpuPct >= 85 ? WARN : INK;
+        readout(canvas, l + pad + quarter * 1.5f, base, "cpu",
+                c.cpuPct < 0 ? "--" : String.valueOf(c.cpuPct), "%", cpuColour);
+
+        final String ram = (c.memUsedMb < 0 || c.memTotalMb <= 0) ? "--"
+                : String.format(Locale.US, "%d", c.memUsedMb);
+        readout(canvas, l + pad + quarter * 2.5f, base, "ram", ram,
+                c.memTotalMb > 0 ? "of " + c.memTotalMb + " MB" : "MB", INK);
+
+        // The real air throughput, FEC included, which says more than the configured bitrate.
+        final String air = c.txKbit < 0 ? "--" : String.format(Locale.US, "%.1f", c.txKbit / 1000f);
+        readout(canvas, l + pad + quarter * 3.5f, base, "air", air, "Mbit/s", INK);
     }
 
     private static String cardinal(int deg) {

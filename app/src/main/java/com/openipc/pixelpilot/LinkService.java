@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.hardware.usb.UsbManager;
+import android.net.VpnService;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Handler;
@@ -145,6 +146,19 @@ public class LinkService extends Service
         // immersive mode is exactly where a HUD wants it.
         MavlinkNative.nativeStart(this);
         main.post(mavlinkPoll);
+
+        // The wfb-ng tunnel is what makes the air unit reachable at 10.5.0.10, which the
+        // headset needs for the camera's own health readings. Consent needs an Activity, so
+        // the flat mode still asks for it - but once it has been granted the system remembers,
+        // prepare() returns null, and the service can bring it up on its own. Without this,
+        // launching straight into immersive mode from the headset library leaves no tunnel.
+        if (VpnService.prepare(this) == null) {
+            try {
+                startService(new Intent(this, WfbNgVpnService.class));
+            } catch (IllegalStateException e) {
+                Log.w(TAG, "could not start the wfb-ng tunnel", e);
+            }
+        }
 
         ready = true;
         Log.i(TAG, "link service up");
