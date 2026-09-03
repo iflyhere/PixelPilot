@@ -822,6 +822,21 @@ public class VideoActivity extends LinkClientActivity
 
         // Mirrored across both controllers, so one is enough. Head lock is not on a
         // button - the Touch profile ran out of them - it is the checkbox above.
+        MenuItem handInput = xrMenu.add("Hand gestures");
+        handInput.setCheckable(true);
+        handInput.setChecked(prefs.getBoolean(XrVideoActivity.PREF_HAND_INPUT, false));
+        handInput.setOnMenuItemClickListener(item -> {
+            boolean enabled = !item.isChecked();
+            item.setChecked(enabled);
+            prefs.edit().putBoolean(XrVideoActivity.PREF_HAND_INPUT, enabled).apply();
+            Toast.makeText(this, enabled
+                    ? "Hand gestures on - expect false triggers with a radio in your hands"
+                    : "Hand gestures off", Toast.LENGTH_LONG).show();
+            item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
+            item.setActionView(new View(this));
+            return false;
+        });
+
         SubMenu maps = xrMenu.addSubMenu("Offline maps");
         addMapImport(maps, "Basemap", MapFiles.Kind.BASEMAP, PICK_BASEMAP_REQUEST_CODE);
         addMapImport(maps, "Terrain (height)", MapFiles.Kind.TERRAIN, PICK_TERRAIN_REQUEST_CODE);

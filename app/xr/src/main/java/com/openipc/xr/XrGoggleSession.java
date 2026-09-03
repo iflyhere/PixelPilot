@@ -263,6 +263,20 @@ public final class XrGoggleSession {
         if (handle != 0) nativeSetSharpening(handle, enabled);
     }
 
+    /**
+     * Whether hand tracking may act at all. Off by default.
+     *
+     * <p>A pilot's hands are on a transmitter, and Meta's thumb microgestures are a thumb
+     * sliding along the index finger - close enough to working a gimbal that the recogniser
+     * fires on it. So hand input is something to switch on when the hands are free, not a
+     * channel that is always live.
+     */
+    public void setHandInputEnabled(boolean enabled) {
+        if (handle != 0) {
+            nativeSetHandInputEnabled(handle, enabled);
+        }
+    }
+
     /** Submits or drops one overlay layer. Takes effect on the next frame. */
     public void setOverlayVisible(int id, boolean visible) {
         if (handle != 0) {
@@ -328,6 +342,8 @@ public final class XrGoggleSession {
     private static native int nativeGetOverlayHeight(long handle, int id);
 
     private static native void nativeSetOverlayVisible(long handle, int id, boolean visible);
+
+    private static native void nativeSetHandInputEnabled(long handle, boolean enabled);
 
     private static native void nativeRunLoop(long handle, XrGoggleSession listener);
 

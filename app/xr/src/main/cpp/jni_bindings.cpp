@@ -78,6 +78,14 @@ JNI_METHOD(jint, nativeGetOverlayHeight)(JNIEnv* env, jclass clazz, jlong handle
     return native(handle)->overlayHeight(id);
 }
 
+JNI_METHOD(void, nativeSetHandInputEnabled)
+(JNIEnv* env, jclass clazz, jlong handle, jboolean enabled)
+{
+    (void) env;
+    (void) clazz;
+    native(handle)->setHandInputEnabled(enabled == JNI_TRUE);
+}
+
 JNI_METHOD(void, nativeSetOverlayVisible)
 (JNIEnv* env, jclass clazz, jlong handle, jint id, jboolean visible)
 {

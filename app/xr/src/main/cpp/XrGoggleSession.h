@@ -81,6 +81,18 @@ class XrGoggleSession
      * drift off the video centre towards the edges. The rest is free, so the dashboard wraps
      * around the pilot and the map and the chart lie back like instruments on a panel.
      */
+    /**
+     * Whether hand tracking may act at all.
+     *
+     * <p>Off by default, because a pilot's hands are on a transmitter. Meta's thumb
+     * microgestures are a thumb sliding along the index finger, which is very close to
+     * what working a gimbal looks like, and a pinch-and-hold is close to gripping the
+     * sticks. Every false trigger was a real one for the recogniser.
+     */
+    void setHandInputEnabled(bool enabled) { mHandInputEnabled.store(enabled); }
+
+    bool handInputEnabled() const { return mHandInputEnabled.load(); }
+
     enum Overlay
     {
         OVERLAY_SYMBOLOGY = 0,
@@ -271,6 +283,7 @@ class XrGoggleSession
     int                mSwapchainWidth  = 1920;
     int                mSwapchainHeight = 1080;
     std::atomic<float> mQuadDistance{1.6f};
+    std::atomic<bool>  mHandInputEnabled{false};
     std::atomic<float> mQuadWidth{2.2f};
     std::atomic<float> mQuadHeightOffset{0.0f};
     std::atomic<bool>  mHeadLocked{true};

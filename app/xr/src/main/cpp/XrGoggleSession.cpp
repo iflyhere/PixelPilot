@@ -912,7 +912,9 @@ bool XrGoggleSession::createActions()
                 {mActionRaise, path("/user/hand/right/input/swipe_forward_meta")});
             handBindings.push_back(
                 {mActionLower, path("/user/hand/right/input/swipe_backward_meta")});
-            handBindings.push_back({mActionExit, path("/user/hand/right/input/swipe_left_meta")});
+            // Deliberately no gesture for leaving immersive mode. A microgesture fires on one
+            // thumb movement with nothing to hold, and a false exit in flight costs the video
+            // feed - the menu button and the flat-mode menu are enough for something done once.
         }
 
         XrInteractionProfileSuggestedBinding hands{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
@@ -1339,19 +1341,24 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
     {
         XrAction action;
         int      button;
+        bool     handOnly;  // bound only to a hand gesture, so it obeys setHandInputEnabled
     } buttons[] = {
-        {mActionRecenter, BUTTON_RECENTER},
-        {mActionPassthrough, BUTTON_PASSTHROUGH},
-        {mActionRecord, BUTTON_RECORD},
-        {mActionLockMode, BUTTON_LOCK_MODE},
-        {mActionRaise, BUTTON_RAISE},
-        {mActionLower, BUTTON_LOWER},
-        {mActionExit, BUTTON_EXIT},
+        {mActionRecenter, BUTTON_RECENTER, false},
+        {mActionPassthrough, BUTTON_PASSTHROUGH, false},
+        {mActionRecord, BUTTON_RECORD, false},
+        {mActionLockMode, BUTTON_LOCK_MODE, false},
+        // Raise and lower have no controller binding - the thumbstick vector does the panel
+        // height - so these two are microgestures and nothing else.
+        {mActionRaise, BUTTON_RAISE, true},
+        {mActionLower, BUTTON_LOWER, true},
+        {mActionExit, BUTTON_EXIT, false},
     };
 
+    const bool handsMayAct = mHandInputEnabled.load();
     for (const auto& b : buttons)
     {
         if (b.action == XR_NULL_HANDLE) continue;
+        if (b.handOnly && !handsMayAct) continue;
         XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
         get.action = b.action;
         XrActionStateBoolean state{XR_TYPE_ACTION_STATE_BOOLEAN};
@@ -1398,9 +1405,10 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
         }
     }
 
-    // Hand gestures, which need a deliberate hold before they count.
+    // Hand gestures, which need a deliberate hold before they count - and only when hand
+    // input is switched on at all, see setHandInputEnabled().
     const XrTime nowNs = mLastPredictedDisplayTime;
-    if (heldActionFired(mActionHandRecenter, 0, nowNs))
+    if (handsMayAct && heldActionFired(mActionHandRecenter, 0, nowNs))
     {
         mRecenterRequested = true;
         requestHaptic(0.5f, 60);
@@ -1410,7 +1418,7 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
             if (env->ExceptionCheck()) env->ExceptionClear();
         }
     }
-    if (heldActionFired(mActionHandPassthrough, 1, nowNs))
+    if (handsMayAct && heldActionFired(mActionHandPassthrough, 1, nowNs))
     {
         mPassthroughWanted = !mPassthroughWanted.load();
         requestHaptic(0.5f, 60);

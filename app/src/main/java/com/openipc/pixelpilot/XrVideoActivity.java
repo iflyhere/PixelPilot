@@ -106,6 +106,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     // Preference keys, all in the shared "general" store so the flat activity's settings
     // menu can write them.
     static final String PREF_HEAD_LOCKED = "xr_head_locked";
+    /** Hand tracking as an input channel. Off by default - see setHandInputEnabled(). */
+    static final String PREF_HAND_INPUT = "xr_hand_input";
     static final String PREF_PASSTHROUGH = "xr_passthrough";
     static final String PREF_SHARPENING = "xr_sharpening";
     static final String PREF_REFRESH_HZ = "xr_refresh_hz";
@@ -203,6 +205,9 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         xr.setHeadLocked(prefs.getBoolean(PREF_HEAD_LOCKED, true));
         xr.setPassthrough(prefs.getBoolean(PREF_PASSTHROUGH, false));
         xr.setSharpening(prefs.getBoolean(PREF_SHARPENING, true));
+        // Default off: while flying, the hands are on a transmitter and every gesture the
+        // recogniser sees is one the pilot did not mean.
+        xr.setHandInputEnabled(prefs.getBoolean(PREF_HAND_INPUT, false));
         xr.setQuadWidth(prefs.getFloat(PREF_QUAD_WIDTH, 2.2f));
         xr.setQuadDistance(prefs.getFloat(PREF_QUAD_DISTANCE, 1.6f));
         xr.setQuadHeightOffset(prefs.getFloat(PREF_QUAD_HEIGHT, 0f));
