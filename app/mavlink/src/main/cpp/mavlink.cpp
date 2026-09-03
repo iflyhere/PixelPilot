@@ -95,6 +95,7 @@ void *listen(int mavlink_port) {
     // First-seen (sysid, compid, msgid) triples, so the log line is printed once per kind
     // rather than at the message rate.
     std::set<uint32_t> seen;
+    bool reported_first_datagram = false;
 
     char buffer[2048];
     while (!mavlink_thread_signal) {
@@ -113,6 +114,27 @@ void *listen(int mavlink_port) {
             // peer has done an orderly shutdown
             __android_log_print(ANDROID_LOG_ERROR, TAG, "Shutting down mavlink: ret=0");
             return 0;
+        }
+
+        // The parser below is silent about anything it cannot make sense of, so a stream in
+        // the wrong protocol is indistinguishable from no stream at all. Report the first
+        // datagram once, and name the protocol if the magic is one we recognise: MAVLink v1
+        // starts 0xFE, v2 0xFD, while MSP v1 is "$M" and MSP v2 "$X" - which is what msposd
+        // forwards unless it is started with -M/--mavlink.
+        if (!reported_first_datagram) {
+            reported_first_datagram = true;
+            const unsigned char* u = (const unsigned char*) buffer;
+            const char* kind = "unrecognised";
+            if (ret >= 1 && u[0] == 0xFE) kind = "MAVLink v1";
+            else if (ret >= 1 && u[0] == 0xFD) kind = "MAVLink v2";
+            else if (ret >= 2 && u[0] == '$' && u[1] == 'M') kind = "MSP v1 - msposd needs -M/--mavlink";
+            else if (ret >= 2 && u[0] == '$' && u[1] == 'X') kind = "MSP v2 - msposd needs -M/--mavlink";
+            __android_log_print(ANDROID_LOG_INFO, TAG,
+                                "mavlink port: first datagram %d bytes, looks like %s "
+                                "(%02X %02X %02X %02X %02X %02X)",
+                                ret, kind,
+                                ret > 0 ? u[0] : 0, ret > 1 ? u[1] : 0, ret > 2 ? u[2] : 0,
+                                ret > 3 ? u[3] : 0, ret > 4 ? u[4] : 0, ret > 5 ? u[5] : 0);
         }
 
         // Parse
