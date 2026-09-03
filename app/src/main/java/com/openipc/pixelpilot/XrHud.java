@@ -179,7 +179,10 @@ final class XrHud {
 
         final float cx = width / 2f;
         final float cy = height / 2f;
-        final float unit = height / 24f;  // one "line" of layout
+        // One "line" of layout. The panel subtends a good part of the view, so an item in
+        // a corner costs a head movement to read - hence a generous margin below, and a
+        // size that holds up against the video rather than against the pixel count.
+        final float unit = height / 18f;
 
         final MavlinkData t = telemetry;
         final boolean fresh = t != null && (System.currentTimeMillis() - telemetryAt) < STALE_MS;
@@ -187,11 +190,11 @@ final class XrHud {
         if (fresh) {
             drawHorizon(canvas, cx, cy, unit, t);
             drawHeading(canvas, cx, unit, t);
-            drawTape(canvas, unit * 2.2f, cy, unit, metres(t.telemetryAltitude), "ALT", "m", true);
-            drawTape(canvas, width - unit * 2.2f, cy, unit, metres(t.telemetryGSpeed), "SPD", "m/s", false);
+            drawTape(canvas, unit * 1.5f, cy, unit, metres(t.telemetryAltitude), "ALT", "m", true);
+            drawTape(canvas, width - unit * 1.5f, cy, unit, metres(t.telemetryGSpeed), "SPD", "m/s", false);
             drawThrottle(canvas, cx, cy, unit, t);
-            drawBattery(canvas, unit, height - unit * 1.2f, unit, t);
-            drawSats(canvas, cx, height - unit * 0.8f, unit, t);
+            drawBattery(canvas, unit * 1.5f, height - unit * 1.7f, unit, t);
+            drawSats(canvas, cx, height - unit * 0.9f, unit, t);
             drawHome(canvas, cx, cy, unit, t);
         } else {
             text(canvas, "NO TELEMETRY", cx, cy - unit * 4f, unit * 0.8f, COL_ALERT, Paint.Align.CENTER);
@@ -200,7 +203,7 @@ final class XrHud {
         // The reticle is always drawn: it is the one thing that has to be there even with no
         // flight controller at all, because it is what the pilot aims with.
         drawReticle(canvas, cx, cy, unit);
-        drawLink(canvas, width - unit, height - unit * 1.2f, unit);
+        drawLink(canvas, width - unit * 1.5f, height - unit * 1.7f, unit);
 
         if (!note.isEmpty()) {
             text(canvas, note, cx, height - unit * 2.2f, unit * 0.6f, COL_WARN, Paint.Align.CENTER);
@@ -280,7 +283,7 @@ final class XrHud {
             final int mark = ((hdg + d) % 360 + 360) % 360;
             final float x = cx + d * pxPerDeg;
             seg(canvas, x, y + unit * 0.15f, x, y + unit * 0.35f);
-            text(canvas, cardinal(mark), x, y + unit * 0.32f + unit * 0.35f, unit * 0.32f,
+            text(canvas, cardinal(mark), x, y + unit * 0.36f + unit * 0.35f, unit * 0.36f,
                     COL_PRIMARY, Paint.Align.CENTER);
         }
         canvas.restore();
@@ -301,18 +304,15 @@ final class XrHud {
     private void drawTape(Canvas canvas, float x, float cy, float unit, float value,
                           String label, String suffix, boolean leftSide) {
         final Paint.Align align = leftSide ? Paint.Align.LEFT : Paint.Align.RIGHT;
-        text(canvas, label, x, cy - unit * 1.1f, unit * 0.36f, COL_PRIMARY, align);
+        text(canvas, label, x, cy - unit * 1.1f, unit * 0.40f, COL_PRIMARY, align);
         text(canvas, String.format(Locale.US, "%.0f", value), x, cy, unit * 0.95f,
                 COL_PRIMARY, align);
-        text(canvas, suffix, x, cy + unit * 0.6f, unit * 0.36f, COL_PRIMARY, align);
+        text(canvas, suffix, x, cy + unit * 0.6f, unit * 0.40f, COL_PRIMARY, align);
     }
 
     private void drawBattery(Canvas canvas, float x, float y, float unit, MavlinkData t) {
         final float v = volts(t);
-        // Per-cell is the number that means something across pack sizes: 19.9V is a healthy
-        // 6S and a nearly flat 4S, and only the cell count tells them apart. Guessed from the
-        // voltage, which is unambiguous because the usable ranges do not overlap.
-        final int cells = v > 21f ? 6 : v > 14f ? 4 : v > 7f ? 2 : 1;
+        final int cells = cellCount(v);
         final float perCell = v / cells;
         final int colour = perCell < 3.5f ? COL_ALERT : perCell < 3.7f ? COL_WARN : COL_PRIMARY;
 
@@ -320,14 +320,31 @@ final class XrHud {
                 Paint.Align.LEFT);
         text(canvas, String.format(Locale.US, "%.2fV/cell %dS  %.1fA  %.0fmAh", perCell, cells,
                         amps(t), t.telemetryCurrentConsumed),
-                x, y + unit * 0.55f, unit * 0.36f, colour, Paint.Align.LEFT);
+                x, y + unit * 0.55f, unit * 0.40f, colour, Paint.Align.LEFT);
+    }
+
+    /**
+     * Smallest common pack whose full voltage covers what is being measured.
+     *
+     * <p>Per-cell is the number that means something across pack sizes - 19.9V is a
+     * three-quarters 6S and an impossible 4S - and the ranges do not overlap, so the pack can
+     * be read off the voltage. 4.25V per cell is the ceiling: a little above a full 4.2V cell
+     * so a freshly charged pack is not rounded up to the next size.
+     */
+    private static int cellCount(float volts) {
+        for (int n : new int[]{1, 2, 3, 4, 6, 8, 12}) {
+            if (volts <= n * 4.25f) {
+                return n;
+            }
+        }
+        return 12;
     }
 
     private void drawSats(Canvas canvas, float cx, float y, float unit, MavlinkData t) {
         final int sats = (int) t.telemetrySat;
         final boolean fix = t.gps_fix_type >= 3;
         text(canvas, String.format(Locale.US, "%d sat%s", sats, fix ? "" : " no fix"),
-                cx, y, unit * 0.36f, fix ? COL_PRIMARY : COL_WARN, Paint.Align.CENTER);
+                cx, y, unit * 0.40f, fix ? COL_PRIMARY : COL_WARN, Paint.Align.CENTER);
     }
 
     /**
@@ -388,7 +405,7 @@ final class XrHud {
             seg(canvas, cx - w / 2f, y, cx - w / 2f + w * pct / 100f, y);
         }
         text(canvas, String.format(Locale.US, "THR %.0f%%", pct), cx, y - unit * 0.28f,
-                unit * 0.32f, COL_PRIMARY, Paint.Align.CENTER);
+                unit * 0.36f, COL_PRIMARY, Paint.Align.CENTER);
     }
 
     private void drawLink(Canvas canvas, float x, float y, float unit) {
@@ -400,9 +417,9 @@ final class XrHud {
                 : s.count_p_fec_recovered > 0 ? COL_WARN : COL_PRIMARY;
         // avg_rssi is a 0..100 figure here, not dBm - the flat OSD colours it at 30 and 60.
         text(canvas, String.format(Locale.US, "link %d", s.avg_rssi), x, y,
-                unit * 0.36f, colour, Paint.Align.RIGHT);
+                unit * 0.40f, colour, Paint.Align.RIGHT);
         text(canvas, String.format(Locale.US, "fec %d   lost %d", s.count_p_fec_recovered,
-                s.count_p_lost), x, y + unit * 0.5f, unit * 0.36f, colour, Paint.Align.RIGHT);
+                s.count_p_lost), x, y + unit * 0.5f, unit * 0.40f, colour, Paint.Align.RIGHT);
     }
 
     // ------------------------------------------------------------------ helpers
