@@ -39,10 +39,15 @@ public final class CameraStats {
     private static final String URL_TEXT = "http://10.5.0.10:8080/pixelpilot.txt";
 
     /** The camera publishes every two seconds, so asking faster only costs air time. */
-    private static final long POLL_MS = 3000;
+    private static final long POLL_MS = 5000;
 
-    /** Short: this shares the air link with the video, and a stall must not queue up. */
-    private static final int TIMEOUT_MS = 1500;
+    /**
+     * Generous on purpose. This is a TCP handshake across a lossy wireless tunnel, and the
+     * initial retransmit timeout alone is about a second - measured, a 1500ms limit failed
+     * every time while the same request with six seconds succeeded. Still under the poll
+     * interval, so a stalled request cannot pile up behind the next one.
+     */
+    private static final int TIMEOUT_MS = 4000;
 
     /** Older than this and the reading is not shown as if it were current. */
     public static final long STALE_MS = 12000;
