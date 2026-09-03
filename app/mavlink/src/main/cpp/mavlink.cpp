@@ -26,10 +26,15 @@
 #include <android/log.h>
 #include <set>
 
+#include "msp.h"
+
 #include "mavlink/common/mavlink.h"
 #include "mavlink.h"
 
 #define TAG "pixelpilot"
+
+// Declared in mavlink.h, which msp.cpp also includes; defined here so there is one instance.
+struct mavlink_data latestMavlinkData;
 
 long distance_meters_between(double lat1, double lon1, double lat2, double lon2) {
     double delta = (lon1 - lon2) * 0.017453292519;
@@ -116,25 +121,31 @@ void *listen(int mavlink_port) {
             return 0;
         }
 
-        // The parser below is silent about anything it cannot make sense of, so a stream in
-        // the wrong protocol is indistinguishable from no stream at all. Report the first
-        // datagram once, and name the protocol if the magic is one we recognise: MAVLink v1
-        // starts 0xFE, v2 0xFD, while MSP v1 is "$M" and MSP v2 "$X" - which is what msposd
-        // forwards unless it is started with -M/--mavlink.
+        // The telemetry port carries whatever the air side forwards, and that is not always
+        // MAVLink: a Betaflight flight controller wired to the camera over MSP DisplayPort
+        // speaks MSP, and msposd relays it unchanged unless started with -M/--mavlink. Report
+        // the first datagram so the two cases are told apart in a bug report rather than both
+        // showing up as an empty OSD.
         if (!reported_first_datagram) {
             reported_first_datagram = true;
             const unsigned char* u = (const unsigned char*) buffer;
             const char* kind = "unrecognised";
             if (ret >= 1 && u[0] == 0xFE) kind = "MAVLink v1";
             else if (ret >= 1 && u[0] == 0xFD) kind = "MAVLink v2";
-            else if (ret >= 2 && u[0] == '$' && u[1] == 'M') kind = "MSP v1 - msposd needs -M/--mavlink";
-            else if (ret >= 2 && u[0] == '$' && u[1] == 'X') kind = "MSP v2 - msposd needs -M/--mavlink";
+            else if (msp_looks_like_msp(u, (size_t) ret)) kind = "MSP";
             __android_log_print(ANDROID_LOG_INFO, TAG,
-                                "mavlink port: first datagram %d bytes, looks like %s "
+                                "telemetry: first datagram %d bytes, %s "
                                 "(%02X %02X %02X %02X %02X %02X)",
                                 ret, kind,
                                 ret > 0 ? u[0] : 0, ret > 1 ? u[1] : 0, ret > 2 ? u[2] : 0,
                                 ret > 3 ? u[3] : 0, ret > 4 ? u[4] : 0, ret > 5 ? u[5] : 0);
+        }
+
+        if (msp_looks_like_msp((const uint8_t*) buffer, (size_t) ret)) {
+            if (msp_parse_datagram((const uint8_t*) buffer, (size_t) ret)) {
+                latestMavlinkDataChange = true;
+            }
+            continue;
         }
 
         // Parse

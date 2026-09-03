@@ -7,6 +7,8 @@
 
 extern int mavlink_port;
 
+#include <cstdint>
+
 size_t numOfChars(const char s[]);
 
 char *insertString(char s1[], const char s2[], size_t pos);
@@ -42,7 +44,9 @@ struct mavlink_data {
     uint16_t wfb_errors;
     uint16_t wfb_fec_fixed;
     int8_t wfb_flags;
-} latestMavlinkData;
+};
+
+extern struct mavlink_data latestMavlinkData;
 
 typedef enum PLANE_MODE {
     PLANE_MODE_MANUAL = 0, /*  | */
