@@ -11,6 +11,7 @@ import android.util.Log;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.openipc.mavlink.MavlinkData;
 import com.openipc.videonative.DecodingInfo;
 import com.openipc.wfbngrtl8812.WfbNGStats;
 
@@ -94,5 +95,9 @@ public abstract class LinkClientActivity extends AppCompatActivity implements Li
 
     @Override
     public void onWfbStats(WfbNGStats stats) {
+    }
+
+    @Override
+    public void onMavlink(MavlinkData data) {
     }
 }

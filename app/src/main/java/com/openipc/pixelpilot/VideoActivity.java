@@ -55,7 +55,6 @@ import com.github.mikephil.charting.data.PieDataSet;
 import com.github.mikephil.charting.data.PieEntry;
 import com.github.mikephil.charting.formatter.PercentFormatter;
 import com.openipc.mavlink.MavlinkData;
-import com.openipc.mavlink.MavlinkNative;
 import com.openipc.mavlink.MavlinkUpdate;
 import com.openipc.pixelpilot.databinding.ActivityVideoBinding;
 import com.openipc.pixelpilot.osd.OSDElement;
@@ -114,12 +113,6 @@ public class VideoActivity extends LinkClientActivity
     private static final String PREF_OD_CUSTOM_MODEL_URI = "od_custom_model_uri";
     private static final String PREF_OD_CUSTOM_MODEL_NAME = "od_custom_model_name";
     final Handler handler = new Handler(Looper.getMainLooper());
-    final Runnable runnable = new Runnable() {
-        public void run() {
-            MavlinkNative.nativeCallBack(VideoActivity.this);
-            handler.postDelayed(this, 100);
-        }
-    };
     protected DecodingInfo mDecodingInfo;
     int lastVideoW = 0, lastVideoH = 0, lastCodec = 1;
     BroadcastReceiver batteryReceiver;
@@ -341,9 +334,6 @@ public class VideoActivity extends LinkClientActivity
 
         // Button Handlers
         setupButtonHandlers();
-
-        // Mavlink Setup
-        setupMavlink();
 
         // Battery Receiver
         setupBatteryReceiver();
@@ -1306,11 +1296,13 @@ public class VideoActivity extends LinkClientActivity
     // ----------------------------------------------------------------------------
 
     /**
-     * Starts the native Mavlink service and posts an initial Runnable to the Handler.
+     * Telemetry arrives from {@link LinkService} now. It used to be started here and stopped
+     * in onStop(), which meant entering the immersive mode killed it - the same lifetime bug
+     * the video link had.
      */
-    private void setupMavlink() {
-        MavlinkNative.nativeStart(this);
-        handler.post(runnable);
+    @Override
+    public void onMavlink(MavlinkData data) {
+        onNewMavlinkData(data);
     }
 
     // ----------------------------------------------------------------------------
@@ -1654,8 +1646,6 @@ public class VideoActivity extends LinkClientActivity
 
     @Override
     protected void onStop() {
-        MavlinkNative.nativeStop(this);
-        handler.removeCallbacks(runnable);
         unregisterReceivers();
         super.onStop();
     }

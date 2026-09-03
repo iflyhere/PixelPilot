@@ -19,6 +19,9 @@ import android.view.Surface;
 
 import androidx.annotation.Nullable;
 
+import com.openipc.mavlink.MavlinkData;
+import com.openipc.mavlink.MavlinkNative;
+import com.openipc.mavlink.MavlinkUpdate;
 import com.openipc.videonative.DecodingInfo;
 import com.openipc.videonative.IVideoParamsChanged;
 import com.openipc.videonative.VideoPlayer;
@@ -42,7 +45,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * and the USB permission dialog is not asked again. The service is a foreground service
  * because it must keep running while the pilot is looking at something else.
  */
-public class LinkService extends Service implements LinkStatusView, IVideoParamsChanged, WfbNGStatsChanged {
+public class LinkService extends Service
+        implements LinkStatusView, IVideoParamsChanged, WfbNGStatsChanged, MavlinkUpdate {
 
     /** Driver debug logging; off by default, see WfbNgLink.setVerboseLog(). */
     static final String PREF_VERBOSE_DRIVER_LOG = "verbose_driver_log";
@@ -71,6 +75,9 @@ public class LinkService extends Service implements LinkStatusView, IVideoParams
         void onDecodingInfo(DecodingInfo info);
 
         void onWfbStats(WfbNGStats stats);
+
+        /** Flight controller telemetry. Null fields stay at whatever the last packet left. */
+        void onMavlink(MavlinkData data);
     }
 
     public class LocalBinder extends Binder {
@@ -91,6 +98,7 @@ public class LinkService extends Service implements LinkStatusView, IVideoParams
     private boolean usbReceiverRegistered;
     private String lastStatus = "";
     private WfbNGStats lastStats;
+    private MavlinkData lastMavlink;
     private int videoWidth;
     private int videoHeight;
 
@@ -132,8 +140,35 @@ public class LinkService extends Service implements LinkStatusView, IVideoParams
 
         registerUsbReceiver();
 
+        // Telemetry is owned here for the same reason the link is: VideoActivity used to call
+        // nativeStop() from onStop(), so entering the immersive mode killed it - and the
+        // immersive mode is exactly where a HUD wants it.
+        MavlinkNative.nativeStart(this);
+        main.post(mavlinkPoll);
+
         ready = true;
         Log.i(TAG, "link service up");
+    }
+
+    /**
+     * The native side collects into one struct and hands it over only when something changed,
+     * so this is a poll rather than a push. 100ms matches the flat activity's old rate and is
+     * ahead of the ~20Hz the air side sends at.
+     */
+    private final Runnable mavlinkPoll = new Runnable() {
+        @Override
+        public void run() {
+            MavlinkNative.nativeCallBack(LinkService.this);
+            main.postDelayed(this, 100);
+        }
+    };
+
+    @Override
+    public void onNewMavlinkData(MavlinkData data) {
+        lastMavlink = data;
+        for (Client c : clients) {
+            c.onMavlink(data);
+        }
     }
 
     @Override
@@ -171,6 +206,8 @@ public class LinkService extends Service implements LinkStatusView, IVideoParams
     public void onDestroy() {
         Log.i(TAG, "link service going down");
         main.removeCallbacks(idleShutdown);
+        main.removeCallbacks(mavlinkPoll);
+        MavlinkNative.nativeStop(this);
         ready = false;
         if (usbReceiverRegistered) {
             try {
@@ -258,6 +295,10 @@ public class LinkService extends Service implements LinkStatusView, IVideoParams
         WfbNGStats stats = lastStats;
         if (stats != null) {
             client.onWfbStats(stats);
+        }
+        MavlinkData mavlink = lastMavlink;
+        if (mavlink != null) {
+            client.onMavlink(mavlink);
         }
     }
 
