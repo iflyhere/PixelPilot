@@ -706,35 +706,38 @@ void XrGoggleSession::describeOverlays()
     sym.distance = 0.0f;
     sym.widthM   = 0.0f;
 
-    OverlayLayer& dash    = mOverlays[OVERLAY_DASHBOARD];
-    dash.name             = "dashboard";
-    dash.width            = 2560;
-    dash.height           = 640;
-    dash.pitchDeg         = -29.0f;  // just below the video's bottom edge
-    dash.distance         = 1.40f;
-    dash.cylinder         = true;
-    dash.centralAngleDeg  = 58.0f;
-    dash.aspect           = 0.25f;  // height / width
+    // Two rows of two cards rather than one row of four: the video quad is already about
+    // +-34 degrees wide, so horizontal room is the scarce thing and the map and the chart need
+    // it more than the dashboard does.
+    OverlayLayer& dash   = mOverlays[OVERLAY_DASHBOARD];
+    dash.name            = "dashboard";
+    dash.width           = 1536;
+    dash.height          = 768;
+    dash.pitchDeg        = -30.0f;
+    dash.distance        = 1.40f;
+    dash.cylinder        = true;
+    dash.centralAngleDeg = 30.0f;
+    dash.aspect          = 0.50f;  // height / width
 
     OverlayLayer& map = mOverlays[OVERLAY_MINIMAP];
     map.name          = "minimap";
-    map.width         = 768;
-    map.height        = 768;
-    map.yawDeg        = -35.0f;
-    map.pitchDeg      = -31.0f;
-    map.tiltDeg       = 30.0f;  // laid back, like a nav screen on a dash
-    map.distance      = 1.20f;
-    map.widthM        = 0.60f;
+    map.width         = 640;
+    map.height        = 640;
+    map.yawDeg        = -25.0f;
+    map.pitchDeg      = -30.0f;
+    map.tiltDeg       = 26.0f;  // laid back, like a nav screen on a dash
+    map.distance      = 1.25f;
+    map.widthM        = 0.42f;
 
     OverlayLayer& chart = mOverlays[OVERLAY_CHART];
     chart.name          = "chart";
-    chart.width         = 1024;
-    chart.height        = 576;
-    chart.yawDeg        = 35.0f;
-    chart.pitchDeg      = -31.0f;
-    chart.tiltDeg       = 30.0f;
-    chart.distance      = 1.20f;
-    chart.widthM        = 0.74f;
+    chart.width         = 896;
+    chart.height        = 560;
+    chart.yawDeg        = 25.0f;
+    chart.pitchDeg      = -30.0f;
+    chart.tiltDeg       = 26.0f;
+    chart.distance      = 1.25f;
+    chart.widthM        = 0.54f;
 }
 
 bool XrGoggleSession::createSwapchain(JNIEnv* env)
@@ -1599,8 +1602,10 @@ void XrGoggleSession::renderFrame(JNIEnv* env, jobject listener)
         const float dist = o.distance > 0.0f ? o.distance : mQuadDistance.load();
         // Direction first, then the panel is laid back in its own frame - so the tilt changes
         // how it faces without moving where it is.
+        // Negated: a positive rotation about +Y turns forward towards -X, which is to the
+        // left, and the table reads better with "positive is to the right".
         const XrQuaternionf facing =
-            quatMul(quatMul(baseOri, quatAboutY(o.yawDeg * kDeg2Rad)), quatAboutX(o.pitchDeg * kDeg2Rad));
+            quatMul(quatMul(baseOri, quatAboutY(-o.yawDeg * kDeg2Rad)), quatAboutX(o.pitchDeg * kDeg2Rad));
         const XrVector3f offset = quatRotate(facing, XrVector3f{0.0f, 0.0f, -dist});
 
         XrPosef pose{};

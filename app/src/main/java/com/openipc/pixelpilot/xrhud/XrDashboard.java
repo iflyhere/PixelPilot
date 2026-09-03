@@ -14,8 +14,10 @@ import java.util.Locale;
  * curve gives the strip parallax across its width, which is what makes it sit in space rather
  * than in front of the eye.
  *
- * <p>Four cards, left to right, in the order a pilot asks the questions: how much is left,
- * how fast and how high, how much am I asking of it, and is the link healthy.
+ * <p>Four cards, two by two, in the order a pilot asks the questions: how much is left, how
+ * fast and how high, how much am I asking of it, and is the link healthy. Two rows rather than
+ * one because the video quad is already about +-34 degrees wide, so horizontal room is scarce
+ * and the map and the chart beside this need it more.
  */
 public final class XrDashboard extends XrOverlay {
 
@@ -23,8 +25,8 @@ public final class XrDashboard extends XrOverlay {
     private String note = "";
 
     public XrDashboard(Surface surface, int width, int height, FlightData data) {
-        // 8 units tall. Slower than the symbology: none of these numbers rewards 25Hz.
-        super("XrDashboard", surface, width, height, 8, 100);
+        // Slower than the symbology: none of these numbers rewards 25Hz.
+        super("XrDashboard", surface, width, height, 9, 100);
         this.data = data;
     }
 
@@ -36,22 +38,21 @@ public final class XrDashboard extends XrOverlay {
     @Override
     protected void draw(Canvas canvas) {
         final FlightData.Snapshot s = data.snapshot();
-        final float pad = u * 0.5f;
-        final float top = pad;
-        final float bottom = height - pad;
-        // Four cards with equal gaps. The strip is much wider than it is tall, so the layout
-        // is horizontal and every card gets the same height.
-        final float gap = u * 0.42f;
-        final float cardW = (width - pad * 2 - gap * 3) / 4f;
+        final float pad = u * 0.42f;
+        final float gap = u * 0.36f;
+        // Two by two. Horizontal room is what the map and the chart beside this need, so the
+        // dashboard takes the vertical instead.
+        final float cardW = (width - pad * 2 - gap) / 2f;
+        final float cardH = (height - pad * 2 - gap) / 2f;
+        final float x0 = pad;
+        final float x1 = pad + cardW + gap;
+        final float y0 = pad;
+        final float y1 = pad + cardH + gap;
 
-        float x = pad;
-        battery(canvas, x, top, x + cardW, bottom, s);
-        x += cardW + gap;
-        flight(canvas, x, top, x + cardW, bottom, s);
-        x += cardW + gap;
-        demand(canvas, x, top, x + cardW, bottom, s);
-        x += cardW + gap;
-        link(canvas, x, top, x + cardW, bottom, s);
+        battery(canvas, x0, y0, x0 + cardW, y0 + cardH, s);
+        flight(canvas, x1, y0, x1 + cardW, y0 + cardH, s);
+        demand(canvas, x0, y1, x0 + cardW, y1 + cardH, s);
+        link(canvas, x1, y1, x1 + cardW, y1 + cardH, s);
     }
 
     private void battery(Canvas canvas, float l, float t, float r, float b,
