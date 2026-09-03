@@ -81,6 +81,19 @@ class RxFrame {
                _data[21] == channel_id[3];
     }
 
+    /**
+     * The channel id this frame was sent on, i.e. (link_id << 8) | radio_port. Reading it is
+     * the only way to tell "nothing is being transmitted" from "it is being transmitted on a
+     * channel this ground station is not subscribed to".
+     */
+    uint32_t ChannelID() const {
+        if (_data.size() < 16) {
+            return 0;
+        }
+        return ((uint32_t) _data[12] << 24) | ((uint32_t) _data[13] << 16) | ((uint32_t) _data[14] << 8) |
+               (uint32_t) _data[15];
+    }
+
   private:
     bool IsDataFrame() const { return _data.size() >= 2 && _data[0] == _dataHeader[0] && _data[1] == _dataHeader[1]; }
 

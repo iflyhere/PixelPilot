@@ -73,6 +73,9 @@ class WfbngLink {
 
     std::map<int, std::shared_ptr<IRtlDevice>> rtl_devices;
 
+    // Channel ids already reported; see the packet processor in run().
+    std::set<uint32_t> seen_channel_ids;
+
     // Set by stop() and read by run(). A StopRxLoop() only takes effect once the RX loop is
     // running: RtlJaguarDevice::StartRxLoop() clears should_stop on entry, so a stop that
     // lands anywhere before that - including the whole chip bring-up in InitWrite(), which

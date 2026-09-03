@@ -178,6 +178,19 @@ int WfbngLink::run(JNIEnv *env, jobject context, jint wifiChannel, jint bw, jint
                 uint8_t antenna[4] = {1, 1, 1, 1};
 
                 std::lock_guard<std::mutex> lock(agg_mutex);
+                // Report each channel id once, matched or not. Without this a missing stream
+                // is indistinguishable from one arriving on a channel nobody subscribed to,
+                // and both look exactly like "the air side sends nothing".
+                if (seen_channel_ids.insert(frame.ChannelID()).second) {
+                    const uint32_t cid = frame.ChannelID();
+                    __android_log_print(ANDROID_LOG_INFO,
+                                        TAG,
+                                        "rx channel id %u (link_id %u, radio port %u)%s",
+                                        cid,
+                                        cid >> 8,
+                                        cid & 0xff,
+                                        (cid >> 8) == link_id ? "" : " - LINK ID MISMATCH");
+                }
                 if (frame.MatchesChannelID(video_channel_id_be8)) {
                     SignalQualityCalculator::get_instance().add_rssi(packet.RxAtrib.rssi[0], packet.RxAtrib.rssi[1]);
                     SignalQualityCalculator::get_instance().add_snr(packet.RxAtrib.snr[0], packet.RxAtrib.snr[1]);
