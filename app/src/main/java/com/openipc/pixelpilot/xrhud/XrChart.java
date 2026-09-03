@@ -72,7 +72,7 @@ public final class XrChart extends XrOverlay {
         for (int i = 0; i < n; i++) {
             lo = Math.min(lo, alt[i]);
             hi = Math.max(hi, alt[i]);
-            if (!Float.isNaN(terrain[i])) {
+            if (known(terrain[i])) {
                 anyTerrain = true;
                 lo = Math.min(lo, terrain[i]);
                 hi = Math.max(hi, terrain[i]);
@@ -101,7 +101,7 @@ public final class XrChart extends XrOverlay {
         final float lastY = yFor(alt[n - 1], top, bottom, lo, span);
         text(canvas, String.format(Locale.US, "%.0f m", alt[n - 1]), right - u * 0.2f,
                 lastY - u * 0.3f, u * 0.62f, ACCENT, Paint.Align.RIGHT, false);
-        if (anyTerrain && !Float.isNaN(terrain[n - 1])) {
+        if (anyTerrain && known(terrain[n - 1])) {
             text(canvas, String.format(Locale.US, "%.0f agl", alt[n - 1] - terrain[n - 1]),
                     right - u * 0.2f, lastY + u * 0.55f, u * 0.5f, INK_DIM, Paint.Align.RIGHT,
                     false);
@@ -129,7 +129,7 @@ public final class XrChart extends XrOverlay {
         path.moveTo(left, bottom);
         for (int i = 0; i < n; i++) {
             final float x = left + (right - left) * i / (n - 1f);
-            final float v = Float.isNaN(terrain[i]) ? lo : terrain[i];
+            final float v = known(terrain[i]) ? terrain[i] : lo;
             path.lineTo(x, yFor(v, top, bottom, lo, span));
         }
         path.lineTo(right, bottom);
@@ -192,6 +192,14 @@ public final class XrChart extends XrOverlay {
         text(canvas, String.format(Locale.US, "%.2f", cell[n - 1]), right + u * 0.15f,
                 yFor(cell[n - 1], top, bottom, lo, hi - lo) + u * 0.18f, u * 0.46f, WARN,
                 Paint.Align.LEFT, false);
+    }
+
+    /**
+     * NaN means not looked up yet, negative infinity means looked up and not covered by the
+     * height model. Neither is a value, and neither may scale the axis.
+     */
+    private static boolean known(float terrain) {
+        return !Float.isNaN(terrain) && !Float.isInfinite(terrain);
     }
 
     private static float yFor(float value, float top, float bottom, float lo, float span) {

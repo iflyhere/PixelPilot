@@ -74,6 +74,11 @@ public final class FlightData {
     private final float[] histAlt = new float[HISTORY];
     private final float[] histCell = new float[HISTORY];
     private final float[] histTerrain = new float[HISTORY];
+    // Where each sample was taken, so the ground under it can be looked up afterwards. Doing
+    // it inline would put a tile decode on the telemetry thread.
+    private final double[] histLat = new double[HISTORY];
+    private final double[] histLon = new double[HISTORY];
+    private final boolean[] histHasPos = new boolean[HISTORY];
     private volatile int histCount;
     private int histHead;
     private long lastSampleAt;
@@ -173,6 +178,9 @@ public final class FlightData {
         histAlt[histHead] = (t.telemetryAltitude - BIAS) / 100f;
         histCell[histHead] = volts / cellCount(volts);
         histTerrain[histHead] = Float.NaN;  // filled in by the terrain lookup, when there is one
+        histLat[histHead] = t.telemetryLat / 1e7;
+        histLon[histHead] = t.telemetryLon / 1e7;
+        histHasPos[histHead] = t.gps_fix_type >= 3;
         histHead = (histHead + 1) % HISTORY;
         if (histCount < HISTORY) {
             histCount++;
@@ -183,6 +191,38 @@ public final class FlightData {
     public void setTerrainAt(int index, float metres) {
         if (index >= 0 && index < HISTORY) {
             histTerrain[index] = metres;
+        }
+    }
+
+    /**
+     * A sample that has a position but no ground elevation yet, or -1 when there is none.
+     *
+     * <p>Newest first: if the lookup cannot keep up, the part of the chart the pilot is looking
+     * at is the part that gets filled.
+     */
+    public int pendingTerrain() {
+        final int n = histCount;
+        for (int i = 0; i < n; i++) {
+            final int j = (histHead - 1 - i + HISTORY) % HISTORY;
+            if (histHasPos[j] && Float.isNaN(histTerrain[j])) {
+                return j;
+            }
+        }
+        return -1;
+    }
+
+    public double latAt(int index) {
+        return (index >= 0 && index < HISTORY) ? histLat[index] : 0;
+    }
+
+    public double lonAt(int index) {
+        return (index >= 0 && index < HISTORY) ? histLon[index] : 0;
+    }
+
+    /** Marks a sample as looked up and not covered, so it is not retried forever. */
+    public void setTerrainMissing(int index) {
+        if (index >= 0 && index < HISTORY) {
+            histTerrain[index] = Float.NEGATIVE_INFINITY;
         }
     }
 

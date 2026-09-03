@@ -29,6 +29,7 @@ import androidx.annotation.Nullable;
 
 import com.openipc.mavlink.MavlinkData;
 import com.openipc.pixelpilot.xrhud.FlightData;
+import com.openipc.pixelpilot.xrhud.OfflineMaps;
 import com.openipc.pixelpilot.xrhud.XrChart;
 import com.openipc.pixelpilot.xrhud.XrDashboard;
 import com.openipc.pixelpilot.xrhud.XrMinimap;
@@ -134,6 +135,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     private final XrOverlay[] overlays = new XrOverlay[XrGoggleSession.OVERLAY_COUNT];
     @Nullable
     private XrDashboard dashboard;
+    /** Feeds the terrain profile and the basemap from whatever is installed offline. */
+    private final OfflineMaps maps = new OfflineMaps(flightData);
     private TextView statusView;
 
     // The flat activity may still be releasing the USB interface when we get here, so the
@@ -243,6 +246,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         if (link != null) {
             link.detachSurface(0);
         }
+        maps.stop();
         for (int i = 0; i < overlays.length; i++) {
             if (overlays[i] != null) {
                 overlays[i].stop();
@@ -400,6 +404,12 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             flightData.onLink(stats);
         }
         overlay.start();
+
+        // Idempotent, and called from both layers that care: the minimap wants the basemap and
+        // the chart wants the terrain, and either may be the one the runtime granted.
+        if (id == XrGoggleSession.OVERLAY_MINIMAP || id == XrGoggleSession.OVERLAY_CHART) {
+            maps.start(this, (XrMinimap) overlays[XrGoggleSession.OVERLAY_MINIMAP]);
+        }
     }
 
     @Override

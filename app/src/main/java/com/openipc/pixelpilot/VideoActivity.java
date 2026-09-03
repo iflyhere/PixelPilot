@@ -55,6 +55,7 @@ import com.github.mikephil.charting.data.PieDataSet;
 import com.github.mikephil.charting.data.PieEntry;
 import com.github.mikephil.charting.formatter.PercentFormatter;
 import com.openipc.mavlink.MavlinkData;
+import com.openipc.pixelpilot.xrhud.MapFiles;
 import com.openipc.mavlink.MavlinkUpdate;
 import com.openipc.pixelpilot.databinding.ActivityVideoBinding;
 import com.openipc.pixelpilot.osd.OSDElement;
@@ -103,6 +104,8 @@ public class VideoActivity extends LinkClientActivity
     private static final String TAG = "pixelpilot";
     private static final int PICK_KEY_REQUEST_CODE = 1;
     private static final int PICK_DVR_REQUEST_CODE = 2;
+    private static final int PICK_BASEMAP_REQUEST_CODE = 3;
+    private static final int PICK_TERRAIN_REQUEST_CODE = 4;
     private static final int PICK_MODEL_REQUEST_CODE = 3;
     private static final String MODEL_LITE0_FILE = "efficientdet-lite0.tflite";
     private static final String MODEL_LITE2_FILE = "efficientdet-lite2.tflite";
@@ -819,6 +822,10 @@ public class VideoActivity extends LinkClientActivity
 
         // Mirrored across both controllers, so one is enough. Head lock is not on a
         // button - the Touch profile ran out of them - it is the checkbox above.
+        SubMenu maps = xrMenu.addSubMenu("Offline maps");
+        addMapImport(maps, "Basemap", MapFiles.Kind.BASEMAP, PICK_BASEMAP_REQUEST_CODE);
+        addMapImport(maps, "Terrain (height)", MapFiles.Kind.TERRAIN, PICK_TERRAIN_REQUEST_CODE);
+
         MenuItem help = xrMenu.add("A/X recenter, B/Y passthrough, stick click record");
         help.setEnabled(false);
         MenuItem help2 = xrMenu.add("Stick height/size, trigger nearer, grip farther, menu exits");
@@ -828,6 +835,36 @@ public class VideoActivity extends LinkClientActivity
     /**
      * Submenu that lists available channels and allows the user to select one.
      */
+    /**
+     * One import entry per map file, showing what is installed.
+     *
+     * <p>The file has to be copied in rather than read where it was picked: SQLite needs a real
+     * path and random access, and a document URI gives neither. A height model for a whole
+     * flying area can be hundreds of megabytes, so the copy runs off the main thread.
+     */
+    private void addMapImport(SubMenu menu, String title, MapFiles.Kind kind, int requestCode) {
+        MenuItem item = menu.add(title + "  (" + MapFiles.describe(this, kind) + ")");
+        item.setOnMenuItemClickListener(i -> {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            // Some pickers hide a .mbtiles behind an unknown type, so the filter stays wide.
+            intent.setType("*/*");
+            startActivityForResult(intent, requestCode);
+            return true;
+        });
+    }
+
+    private void importMapFile(MapFiles.Kind kind, Uri uri) {
+        Toast.makeText(this, "Importing, this can take a while...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            final String error = MapFiles.importFrom(this, kind, uri);
+            handler.post(() -> Toast.makeText(this,
+                    error == null ? kind + " map installed (" + MapFiles.describe(this, kind) + ")"
+                                  : "Map import failed: " + error,
+                    Toast.LENGTH_LONG).show());
+        }, "map-import").start();
+    }
+
     private void setupChannelSubMenu(PopupMenu popup) {
         SubMenu chnMenu = popup.getMenu().addSubMenu("Channel");
         int channelPref = getChannel(this);
@@ -1545,6 +1582,14 @@ public class VideoActivity extends LinkClientActivity
                 } catch (IOException e) {
                     Log.e(TAG, "Failed to import gs.key from " + uri);
                 }
+            }
+        } else if (requestCode == PICK_BASEMAP_REQUEST_CODE && resultCode == RESULT_OK) {
+            if (data != null && data.getData() != null) {
+                importMapFile(MapFiles.Kind.BASEMAP, data.getData());
+            }
+        } else if (requestCode == PICK_TERRAIN_REQUEST_CODE && resultCode == RESULT_OK) {
+            if (data != null && data.getData() != null) {
+                importMapFile(MapFiles.Kind.TERRAIN, data.getData());
             }
         } else if (requestCode == PICK_DVR_REQUEST_CODE && resultCode == RESULT_OK) {
             // The result data contains a URI for the document or directory that
