@@ -24,6 +24,7 @@
 #include <thread>
 #include <assert.h>
 #include <android/log.h>
+#include <set>
 
 #include "mavlink/common/mavlink.h"
 #include "mavlink.h"
@@ -91,6 +92,10 @@ void *listen(int mavlink_port) {
         return 0;
     }
 
+    // First-seen (sysid, compid, msgid) triples, so the log line is printed once per kind
+    // rather than at the message rate.
+    std::set<uint32_t> seen;
+
     char buffer[2048];
     while (!mavlink_thread_signal) {
         memset(buffer, 0x00, sizeof(buffer));
@@ -118,6 +123,13 @@ void *listen(int mavlink_port) {
         char szBuff[512];
         for (int i = 0; i < ret; ++i) {
             if (mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &msgMav, &status) == 1) {
+                const uint32_t kind =
+                        ((uint32_t) msgMav.sysid << 24) | ((uint32_t) msgMav.compid << 16) | msgMav.msgid;
+                if (seen.insert(kind).second) {
+                    __android_log_print(ANDROID_LOG_INFO, TAG,
+                                        "mavlink: first msgid %u from sysid %u compid %u",
+                                        msgMav.msgid, msgMav.sysid, msgMav.compid);
+                }
                 switch (msgMav.msgid) {
                     case MAVLINK_MSG_ID_HEARTBEAT:
                         tmp32 = mavlink_msg_heartbeat_get_custom_mode(&msgMav);
