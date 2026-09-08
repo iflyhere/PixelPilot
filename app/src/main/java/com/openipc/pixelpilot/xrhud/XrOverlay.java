@@ -119,14 +119,28 @@ public abstract class XrOverlay {
         }
     }
 
-    /** A frame just inside the edge, in the accent colour, while the panel is held. */
-    private void outlineGrab(Canvas canvas) {
-        final float inset = Math.max(2f, u * 0.10f);
+    /**
+     * A frame just inside the edge, in the accent colour, while the panel is held.
+     *
+     * <p>Overridable because a layer's bitmap is not always the shape of what it draws: the
+     * minimap is a circle in a square, and a rounded rectangle around it reads as a frame
+     * drawn in the wrong place rather than as the thing being held.
+     */
+    protected void outlineGrab(Canvas canvas) {
+        final float inset = grabInset();
+        grabPaint().setColor(ACCENT);
+        canvas.drawRoundRect(inset, inset, width - inset, height - inset, u * 0.5f, u * 0.5f,
+                grabPaint());
+    }
+
+    protected final float grabInset() {
+        return Math.max(2f, u * 0.10f);
+    }
+
+    protected final Paint grabPaint() {
         grabPaint.setStyle(Paint.Style.STROKE);
         grabPaint.setStrokeWidth(Math.max(2.5f, u * 0.13f));
-        grabPaint.setColor(ACCENT);
-        canvas.drawRoundRect(inset, inset, width - inset, height - inset, u * 0.5f, u * 0.5f,
-                grabPaint);
+        return grabPaint;
     }
 
     private void frame() {

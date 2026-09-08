@@ -108,13 +108,17 @@ public final class XrChart extends XrOverlay {
         trace(canvas, left, top, right, bottom, n, alt, lo, span, ACCENT, true);
         voltage(canvas, left, top, right, bottom, n);
 
-        // The newest sample, called out where the eye lands at the end of the trace.
+        // The newest sample, called out where the eye lands at the end of the trace - but
+        // kept out of the header row. A climb ends the trace at the top of the plot, and the
+        // callout was landing on top of the "v/cell" title.
         final float lastY = yFor(alt[n - 1], top, bottom, lo, span);
+        final boolean nearTop = lastY - u * 0.3f < top + u * 0.7f;
+        final float valueY = nearTop ? lastY + u * 0.85f : lastY - u * 0.3f;
         text(canvas, String.format(Locale.US, "%.0f m", alt[n - 1]), right - u * 0.2f,
-                lastY - u * 0.3f, u * 0.62f, ACCENT, Paint.Align.RIGHT, false);
+                valueY, u * 0.62f, ACCENT, Paint.Align.RIGHT, false);
         if (anyTerrain && known(terrain[n - 1])) {
             text(canvas, String.format(Locale.US, "%.0f agl", alt[n - 1] - terrain[n - 1]),
-                    right - u * 0.2f, lastY + u * 0.55f, u * 0.5f, INK_DIM, Paint.Align.RIGHT,
+                    right - u * 0.2f, valueY + u * 0.55f, u * 0.5f, INK_DIM, Paint.Align.RIGHT,
                     false);
         }
 
