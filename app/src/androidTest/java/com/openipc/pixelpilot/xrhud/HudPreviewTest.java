@@ -62,9 +62,19 @@ public class HudPreviewTest {
 
     private static final String TAG = "pixelpilot";
 
-    /** Somewhere the installed Baden-Wuerttemberg maps actually cover, in the Neckar valley. */
-    private static final double HOME_LAT = 48.5210;
-    private static final double HOME_LON = 9.0560;
+    /**
+     * Where the simulated flight takes off. Override it to wherever the installed maps
+     * actually cover, which is the whole point of being able to look at this:
+     *
+     * <pre>
+     * adb shell am instrument -w -e class ...HudPreviewTest -e lat 48.5582 -e lon 9.2058      *   com.openipc.pixelpilot.test/androidx.test.runner.AndroidJUnitRunner
+     * </pre>
+     */
+    private static final double DEFAULT_LAT = 48.5582;
+    private static final double DEFAULT_LON = 9.2058;
+
+    private double homeLat = DEFAULT_LAT;
+    private double homeLon = DEFAULT_LON;
 
     /**
      * Two hertz for two minutes, which is what the position history is sized for.
@@ -96,6 +106,10 @@ public class HudPreviewTest {
     @Test
     public void rendersEveryInstrumentAndTheArrangement() throws Exception {
         final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        final android.os.Bundle args = InstrumentationRegistry.getArguments();
+        homeLat = parseArg(args, "lat", DEFAULT_LAT);
+        homeLon = parseArg(args, "lon", DEFAULT_LON);
+        Log.i(TAG, String.format(Locale.US, "flying from %.5f, %.5f", homeLat, homeLon));
         outDir = new File(context.getFilesDir(), "hud-preview");
         assertTrue("could not make " + outDir, outDir.isDirectory() || outDir.mkdirs());
 
@@ -188,9 +202,9 @@ public class HudPreviewTest {
         // A curve rather than a straight line, so the track is worth looking at.
         final double bearing = Math.toRadians(35.0 + 120.0 * progress);
         final double range = 950.0 * (float) Math.pow(progress, 1.25);
-        final double lat = HOME_LAT + range * Math.cos(bearing) / 111320.0;
-        final double lon = HOME_LON + range * Math.sin(bearing)
-                / (111320.0 * Math.cos(Math.toRadians(HOME_LAT)));
+        final double lat = homeLat + range * Math.cos(bearing) / 111320.0;
+        final double lon = homeLon + range * Math.sin(bearing)
+                / (111320.0 * Math.cos(Math.toRadians(homeLat)));
 
         final float volts = 16.8f - 2.6f * progress;   // 4S, draining
         final float amps = 8f + 14f * (float) Math.abs(Math.sin(Math.PI * progress * 2));
@@ -204,7 +218,7 @@ public class HudPreviewTest {
                 amps * 100f,
                 1450f * progress,                                   // mAh consumed
                 lat * 1e7, lon * 1e7,
-                HOME_LAT * 1e7, HOME_LON * 1e7,
+                homeLat * 1e7, homeLon * 1e7,
                 0.0,                                                // hdg, never assigned natively
                 range * 100.0,
                 14f,                                                // sats
@@ -234,13 +248,26 @@ public class HudPreviewTest {
             }
             Log.i(TAG, "basemap credit: " + renderer.attribution());
             for (float span : new float[]{240f, 600f, 1500f, 5000f}) {
-                final Bitmap bmp = renderer.render(HOME_LAT, HOME_LON, span, 512);
+                final Bitmap bmp = renderer.render(homeLat, homeLon, span, 512);
                 if (bmp == null) {
                     Log.w(TAG, "no basemap render at " + span + " m");
                     continue;
                 }
                 write(bmp, String.format(Locale.US, "basemap-%04.0fm.png", span));
             }
+        }
+    }
+
+    private static double parseArg(android.os.Bundle args, String key, double fallback) {
+        final String v = args == null ? null : args.getString(key);
+        if (v == null) {
+            return fallback;
+        }
+        try {
+            return Double.parseDouble(v);
+        } catch (NumberFormatException e) {
+            Log.w(TAG, "ignoring -e " + key + " " + v);
+            return fallback;
         }
     }
 
