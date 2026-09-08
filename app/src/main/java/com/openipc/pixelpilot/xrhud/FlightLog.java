@@ -217,7 +217,11 @@ public final class FlightLog implements AutoCloseable {
             b.append(c.cpuPct).append(',').append(c.memUsedMb).append(',')
                     .append(c.memTotalMb).append(',').append(c.txKbit);
         } else {
-            b.append(",,,");  // four empty camera fields
+            // Five empty camera columns - cam_c, cam_cpu, cam_mem_used, cam_mem_total,
+            // cam_kbit - which is four commas, because the row already ends in one and the
+            // last field is terminated by the newline. Getting this wrong wrote short rows
+            // whenever the camera was quiet, which is most of a session.
+            b.append(",,,,");
         }
         line(b.toString());
 
