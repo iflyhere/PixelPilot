@@ -123,8 +123,10 @@ public final class XrMinimap extends XrOverlay {
         north(canvas, cx, cy, r);
         // Above the credit rather than beside it: both used to sit on the bottom edge and
         // overlapped as soon as a source with a longer name was installed.
-        label(canvas, String.format(Locale.US, "%.0f m", rangeM), cx, cy + r - u * 0.75f,
-                Paint.Align.CENTER);
+        // Outlined, not the plain dim label: over an orthophoto a grey figure on grey roofs
+        // cannot be read at all.
+        text(canvas, String.format(Locale.US, "%.0f m", rangeM), cx, cy + r - u * 0.75f,
+                u * 0.44f, INK, Paint.Align.CENTER, true);
         credit(canvas);
     }
 
@@ -145,8 +147,10 @@ public final class XrMinimap extends XrOverlay {
         back.setStyle(Paint.Style.STROKE);
         back.setStrokeWidth(u * 0.14f);
         back.setColor(Color.argb(170, 0, 0, 0));
-        canvas.drawText(c, width / 2f, height - u * 0.14f, back);
-        canvas.drawText(c, width / 2f, height - u * 0.14f, p);
+        // Far enough off the edge that descenders are not clipped.
+        final float baseline = height - u * 0.30f;
+        canvas.drawText(c, width / 2f, baseline, back);
+        canvas.drawText(c, width / 2f, baseline, p);
     }
 
     private void drawBasemap(Canvas canvas, float cx, float cy, float r,
