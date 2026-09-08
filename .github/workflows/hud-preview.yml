@@ -1,0 +1,82 @@
+# Fork-only helper: build the app plus its instrumentation APK, so the HUD preview test can be
+# run against a connected headset from a laptop with no NDK installed.
+#
+# The test itself renders the instruments to PNGs without bringing OpenXR up - see
+# app/src/androidTest/.../HudPreviewTest.java. This workflow only produces the two APKs; the
+# running and collecting happens locally:
+#
+#   gh workflow run hud-preview.yml --ref master -f target_ref=<branch>
+#   gh run download <id> -D out
+#   adb install -r out/**/app-debug.apk
+#   adb install -r out/**/app-debug-androidTest.apk
+#   adb shell am instrument -w -e class \
+#     com.openipc.pixelpilot.xrhud.HudPreviewTest \
+#     com.openipc.pixelpilot.test/androidx.test.runner.AndroidJUnitRunner
+#
+# Both APKs are signed with the same cached key on purpose: an instrumentation APK whose
+# signature differs from the app's is refused at install with INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+name: HUD preview APKs
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: 'Branch or SHA to build'
+        required: true
+        default: 'feature/xr-goggle-mode'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+          submodules: true
+          # Same reason as the test-apk workflow: a shallow submodule fetch cannot check out
+          # a pinned devourer commit that is no longer its default branch tip, and CMake then
+          # fails on a missing source file.
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Cache signing key
+        uses: actions/cache@v4
+        with:
+          path: ci-debug.keystore
+          key: android-ci-debug-keystore-v2
+
+      - name: Ensure signing key
+        run: |
+          if [ ! -f ci-debug.keystore ]; then
+            echo "generating a new CI signing key"
+            keytool -genkeypair -v -keystore ci-debug.keystore \
+              -storepass android -keypass android -alias pixelpilotci \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=PixelPilot Test Build, OU=CI, O=PixelPilot, C=DE"
+          fi
+
+      # One invocation for both, so they cannot end up signed with different keys.
+      - name: Assemble debug and instrumentation APKs
+        run: |
+          ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest \
+            -Pandroid.injected.signing.store.file="$PWD/ci-debug.keystore" \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=pixelpilotci \
+            -Pandroid.injected.signing.key.password=android
+
+      - name: List what came out
+        run: find app/build/outputs/apk -name '*.apk' -printf '%p  %s bytes\n'
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: hud-preview-apks
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
