@@ -30,6 +30,7 @@ import androidx.annotation.Nullable;
 import com.openipc.mavlink.MavlinkData;
 import com.openipc.pixelpilot.xrhud.CameraStats;
 import com.openipc.pixelpilot.xrhud.FlightData;
+import com.openipc.pixelpilot.xrhud.FlightLog;
 import com.openipc.pixelpilot.xrhud.OfflineMaps;
 import com.openipc.pixelpilot.xrhud.XrChart;
 import com.openipc.pixelpilot.xrhud.XrDashboard;
@@ -59,6 +60,8 @@ import java.io.IOException;
  * configured in {@link VideoActivity} before putting the headset on. Controllers cover
  * what matters in flight.
  */
+import java.util.Locale;
+
 public class XrVideoActivity extends LinkClientActivity implements XrGoggleSession.Listener {
 
     private static final String TAG = "pixelpilot-xr";
@@ -117,6 +120,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     static final String PREF_QUAD_HEIGHT = "xr_quad_height";
     static final String PREF_OVERLAY_DRAG = "xr_overlay_drag";
     static final String PREF_HAND_DRAG = "xr_hand_drag";
+    static final String PREF_FLIGHT_LOG = "xr_flight_log";
     /** One entry per layer and field, e.g. {@code xr_layout_2_yaw}. See saveOverlayPose(). */
     static final String PREF_LAYOUT_PREFIX = "xr_layout_";
     static final String PREF_LAST_VIDEO_W = "xr_last_video_width";
@@ -146,6 +150,10 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     private final OfflineMaps maps = new OfflineMaps(flightData);
     /** The air unit's temperature and load, over the tunnel - not telemetry. */
     private final CameraStats cameraStats = new CameraStats();
+
+    /** Null when logging is switched off or the directory could not be made. */
+    @Nullable
+    private FlightLog flightLog;
     private TextView statusView;
 
     // The flat activity may still be releasing the USB interface when we get here, so the
@@ -224,6 +232,22 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         // Its own switch rather than the gesture one: a drag needs the ray on a panel first,
         // which is nothing like the microgestures that made hand input worth turning off.
         xr.setHandDragEnabled(prefs.getBoolean(PREF_HAND_DRAG, false));
+
+        // On by default. A log that has to be switched on before it is useful is never on
+        // when it turns out to be needed, and five samples a second is a few megabytes an
+        // hour in the app's own external directory.
+        if (prefs.getBoolean(PREF_FLIGHT_LOG, true)) {
+            flightLog = FlightLog.open(this, flightData, cameraStats);
+            logEvent("session", "immersive mode starting");
+        }
+    }
+
+    /** Records something in the flight log, if there is one. */
+    private void logEvent(String kind, String detail) {
+        final FlightLog log = flightLog;
+        if (log != null) {
+            log.event(kind, detail);
+        }
     }
 
     /**
@@ -287,6 +311,12 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         active = false;
         ModeOwner.release(this);
         persistGeometry();
+        final FlightLog log = flightLog;
+        if (log != null) {
+            log.event("session", "immersive mode ending");
+            log.close();
+            flightLog = null;
+        }
         try {
             unregisterReceiver(usbReceiver);
         } catch (IllegalArgumentException ignored) {
@@ -385,6 +415,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         // Only now: the native side lays out its own default arrangement while it creates the
         // layer swapchains, so a saved one has to go in after that rather than before.
         restoreOverlayLayout();
+        logEvent("video", "first surface handed to the decoder");
         statusView.setVisibility(View.GONE);
         linkStarted = true;
     }
@@ -408,6 +439,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         if (id >= 0 && id < overlays.length && overlays[id] != null) {
             overlays[id].setGrabbed(grabbed);
         }
+        logEvent(grabbed ? "grab" : "release", "overlay " + id);
     }
 
     @Override
@@ -415,6 +447,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
                                  float distance, float widthM) {
         // Called on release rather than per frame, so writing straight through is fine.
         final String key = PREF_LAYOUT_PREFIX + id + "_";
+        logEvent("moved", String.format(Locale.US, "overlay %d yaw %.1f pitch %.1f dist %.2f",
+                id, yawDeg, pitchDeg, distance));
         prefs().edit()
                 .putFloat(key + "yaw", yawDeg)
                 .putFloat(key + "pitch", pitchDeg)
@@ -426,6 +460,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
 
     @Override
     public void onXrButton(int button) {
+        logEvent("button", String.valueOf(button));
         switch (button) {
             case XrGoggleSession.BUTTON_RECENTER:
                 // Applied natively already, nothing to persist.

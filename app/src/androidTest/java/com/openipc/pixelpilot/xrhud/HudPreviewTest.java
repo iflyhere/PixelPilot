@@ -164,6 +164,11 @@ public class HudPreviewTest {
         final Bitmap grabbed = render(minimap, MAP_W, MAP_H, "minimap-grabbed");
         cockpit(data, symBmp, dashBmp, grabbed, chartBmp, true, "cockpit-grabbing-the-map");
 
+        // The flight log gets the same treatment as the drawing: written by the real class
+        // from the real data, and then read back. A log that turns out to be unparseable
+        // after a flight is worth nothing, so the check is that it parses.
+        checkFlightLog(context, data);
+
         // What the minimap's backdrop actually looks like at the ranges it draws. Rendered
         // straight from the file rather than through a simulated flight, because the question
         // "is this map sharp enough" is about the map and not about the telemetry.
@@ -256,6 +261,59 @@ public class HudPreviewTest {
                 write(bmp, String.format(Locale.US, "basemap-%04.0fm.png", span));
             }
         }
+    }
+
+    /**
+     * Runs a log against the same simulated flight and checks what came out.
+     *
+     * <p>Not just that a file appeared: that the sample rows have the column count the header
+     * promises and that the numbers parse as numbers. The device here is set to German, where
+     * an unguarded {@code %.1f} writes a decimal comma and silently splits every value into
+     * two columns - which is the kind of thing that is only discovered when the log is
+     * finally needed.
+     */
+    private void checkFlightLog(Context context, FlightData data) throws Exception {
+        final FlightLog log = FlightLog.open(context, data, null);
+        assertNotNull("no flight log was opened", log);
+        log.event("test", "checking the log writes what it says it does");
+        // Long enough for several samples at 200 ms.
+        Thread.sleep(1200);
+        log.close();
+        Thread.sleep(400);  // the close is posted to the log's own thread
+
+        int header = 0;
+        int samples = 0;
+        int events = 0;
+        int columns = -1;
+        try (java.io.BufferedReader r = new java.io.BufferedReader(
+                new java.io.InputStreamReader(new java.io.FileInputStream(log.file())))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (line.startsWith("#")) {
+                    header++;
+                } else if (line.startsWith("S,t_ms")) {
+                    columns = line.split(",", -1).length;
+                } else if (line.startsWith("S,")) {
+                    final String[] f = line.split(",", -1);
+                    assertTrue("sample has " + f.length + " fields, header says " + columns,
+                            f.length == columns);
+                    // Every non-empty field after the tag must be a number.
+                    for (int i = 1; i < f.length; i++) {
+                        if (!f[i].isEmpty()) {
+                            Double.parseDouble(f[i]);
+                        }
+                    }
+                    samples++;
+                } else if (line.startsWith("E,")) {
+                    events++;
+                }
+            }
+        }
+        Log.i(TAG, "flight log: " + header + " header lines, " + columns + " columns, "
+                + samples + " samples, " + events + " events, "
+                + log.file().length() / 1024 + " kB");
+        assertTrue("no samples were written", samples >= 3);
+        assertTrue("the test event is missing", events >= 1);
     }
 
     private static double parseArg(android.os.Bundle args, String key, double fallback) {

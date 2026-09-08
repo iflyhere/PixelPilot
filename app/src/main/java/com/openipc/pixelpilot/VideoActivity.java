@@ -879,6 +879,24 @@ public class VideoActivity extends LinkClientActivity
             return false;
         });
 
+        // On by default: a log switched on after the fact is never there for the flight you
+        // wanted it for. It writes into the app's own external directory, so it can be
+        // fetched with a plain adb pull and needs no folder picked.
+        MenuItem flightLog = xrMenu.add("Write a flight log");
+        flightLog.setCheckable(true);
+        flightLog.setChecked(prefs.getBoolean(XrVideoActivity.PREF_FLIGHT_LOG, true));
+        flightLog.setOnMenuItemClickListener(item -> {
+            boolean enabled = !item.isChecked();
+            item.setChecked(enabled);
+            prefs.edit().putBoolean(XrVideoActivity.PREF_FLIGHT_LOG, enabled).apply();
+            Toast.makeText(this, enabled
+                    ? "Telemetry and link logged to Android/data/.../files/logs"
+                    : "No flight log", Toast.LENGTH_LONG).show();
+            item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
+            item.setActionView(new View(this));
+            return false;
+        });
+
         MenuItem resetLayout = xrMenu.add("Reset instrument layout");
         resetLayout.setOnMenuItemClickListener(item -> {
             XrVideoActivity.clearSavedLayout(prefs);

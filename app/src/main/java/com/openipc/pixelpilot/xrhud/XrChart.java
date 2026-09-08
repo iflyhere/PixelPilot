@@ -70,9 +70,8 @@ public final class XrChart extends XrOverlay {
         // then the ground is not drawn at all - a band three hundred metres above the flight
         // path is worse than no band.
         final float homeAsl = data.homeElevation();
-        final boolean datumKnown = !Float.isNaN(homeAsl);
         for (int i = 0; i < n; i++) {
-            terrain[i] = (datumKnown && known(terrain[i])) ? terrain[i] - homeAsl : Float.NaN;
+            terrain[i] = FlightData.groundRelative(terrain[i], homeAsl);
         }
 
         // One vertical scale for both the flight path and the ground, so the gap between them

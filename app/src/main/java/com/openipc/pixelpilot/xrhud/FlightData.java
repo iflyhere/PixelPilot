@@ -207,6 +207,49 @@ public final class FlightData {
         return homeElevation;
     }
 
+    /**
+     * Ground elevation moved into the craft's datum: metres relative to the arming point.
+     *
+     * <p>One place, because getting this wrong is not an error that announces itself - the
+     * chart drew the ground three hundred metres above the flight path for a while. NaN when
+     * either value is missing, and the caller then has to say nothing rather than guess.
+     */
+    public static float groundRelative(float terrainAsl, float homeAsl) {
+        if (Float.isNaN(homeAsl) || Float.isNaN(terrainAsl) || Float.isInfinite(terrainAsl)) {
+            return Float.NaN;
+        }
+        return terrainAsl - homeAsl;
+    }
+
+    /**
+     * Height between the craft and the ground below it, or NaN when the model cannot say.
+     *
+     * <p>A difference between two samples of the same height model, so a constant bias in it
+     * cancels out and only its shape has to be right.
+     */
+    public float aglMetres(Snapshot s) {
+        final float ground = latestGroundRelative();
+        return Float.isNaN(ground) ? Float.NaN : s.altitude - ground;
+    }
+
+    /** The newest looked-up ground elevation, relative to the arming point, or NaN. */
+    public float latestGroundRelative() {
+        final float home = homeElevation;
+        if (Float.isNaN(home)) {
+            return Float.NaN;
+        }
+        // Newest first: the lookup fills from the newest end, so this normally stops at once.
+        final int n = histCount;
+        for (int i = 0; i < n; i++) {
+            final int j = (histHead - 1 - i + HISTORY) % HISTORY;
+            final float rel = groundRelative(histTerrain[j], home);
+            if (!Float.isNaN(rel)) {
+                return rel;
+            }
+        }
+        return Float.NaN;
+    }
+
     /** Ground elevation under a past sample, in metres above sea level, or NaN if unknown. */
     public void setTerrainAt(int index, float metres) {
         if (index >= 0 && index < HISTORY) {
