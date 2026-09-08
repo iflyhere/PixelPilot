@@ -180,6 +180,16 @@ def open_db(path, source, bbox, zooms, name, append):
         hi = max(int(have.get("maxzoom", -1)), max(zooms))
         db.execute("UPDATE metadata SET value=? WHERE name='minzoom'", (str(lo),))
         db.execute("UPDATE metadata SET value=? WHERE name='maxzoom'", (str(hi),))
+        # The bounds too: a coarse pass is usually much wider than the sharp one it is being
+        # appended to, and leaving the narrow box recorded would misdescribe the file.
+        try:
+            old_box = [float(v) for v in have["bounds"].split(",")]
+            box = (min(old_box[0], bbox[0]), min(old_box[1], bbox[1]),
+                   max(old_box[2], bbox[2]), max(old_box[3], bbox[3]))
+            db.execute("UPDATE metadata SET value=? WHERE name='bounds'",
+                       ("%s,%s,%s,%s" % box,))
+        except (KeyError, ValueError, IndexError):
+            pass  # a file without usable bounds still works; the app does not read them
         db.commit()
         print("appending to %s, which already has zooms %s..%s"
               % (path, have.get("minzoom"), have.get("maxzoom")))

@@ -75,10 +75,19 @@ public final class BasemapRenderer implements AutoCloseable {
             return null;
         }
         final double wantedMpp = spanMetres / sizePx;
-        final int z = MbTiles.zoomForScale(lat, wantedMpp, tiles.minZoom(), tiles.maxZoom());
+        int z = MbTiles.zoomForScale(lat, wantedMpp, tiles.minZoom(), tiles.maxZoom());
+
+        // A wide span at a fine zoom wants more tiles than are worth decoding twice a second,
+        // and the answer to that is a coarser tile rather than no map: stepping down halves
+        // the count each time. Without this, a file whose coarsest level is too fine simply
+        // stopped drawing a basemap past a few kilometres out, and said so only in the log.
+        double mpp = MbTiles.metresPerPixel(lat, z);
+        while (z > tiles.minZoom() && spanMetres / (mpp * 256.0) > 7.0) {
+            z--;
+            mpp = MbTiles.metresPerPixel(lat, z);
+        }
 
         // How many tiles the wanted span covers at this zoom, in fractional tile units.
-        final double mpp = MbTiles.metresPerPixel(lat, z);
         final double spanTiles = spanMetres / (mpp * 256.0);
         final double cx = MbTiles.tileX(lon, z);
         final double cy = MbTiles.tileY(lat, z);
@@ -90,9 +99,11 @@ public final class BasemapRenderer implements AutoCloseable {
         final int x1 = (int) Math.floor(left + spanTiles);
         final int y1 = (int) Math.floor(top + spanTiles);
 
-        // Guard against a silly span asking for hundreds of tiles.
+        // Still guarded: stepping down stops at the file's coarsest level, and if even that
+        // is too fine for the span there is nothing sensible to draw.
         if ((long) (x1 - x0 + 1) * (y1 - y0 + 1) > 64) {
-            Log.w(TAG, "basemap span would need too many tiles at zoom " + z);
+            Log.w(TAG, "basemap needs too many tiles for " + Math.round(spanMetres)
+                    + " m even at zoom " + z + " - the file has no coarse enough level");
             return null;
         }
 
