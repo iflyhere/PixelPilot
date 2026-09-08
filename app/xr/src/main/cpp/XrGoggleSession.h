@@ -365,6 +365,8 @@ class XrGoggleSession
     std::vector<std::string> mAvailableExtensions;
     bool                     mHasPassthrough    = false;
     bool                     mHasHandInteraction = false;
+    /** Whether the aim/grab bindings were actually accepted for the hand profile. */
+    bool                     mHandDragBound      = false;
     bool                     mHasImageLayout     = false;
     bool                     mHasMicrogestures   = false;
     bool                     mHasSimultaneous    = false;

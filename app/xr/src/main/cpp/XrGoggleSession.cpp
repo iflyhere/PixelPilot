@@ -903,7 +903,7 @@ void XrGoggleSession::updateOverlayDrag(JNIEnv* env, jobject listener,
         // the gesture switch. Asked here rather than at the top of the loop so the runtime is
         // only queried while something is actually being pressed, not on every one of
         // seventy-two frames a second.
-        if (aimIsHand(i) && !mHandDragEnabled.load()) continue;
+        if (aimIsHand(i) && (!mHandDragEnabled.load() || !mHandDragBound)) continue;
 
         XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
         static constexpr XrSpaceLocationFlags kNeeded =
@@ -1208,21 +1208,33 @@ bool XrGoggleSession::createActions()
         // No grasp bindings: a whole-hand squeeze is what you do to pick up a drone, and
         // having that flip passthrough mid-flight is worse than not having the shortcut.
         // Pinch survives, but only when held - see heldActionFired().
+        // Built in tiers, largest first, because a suggestion is atomic per profile: one
+        // path this runtime does not know costs every binding submitted with it. Measured
+        // the hard way - a wrong pose path took the working pinch bindings down with it, so
+        // additions are peeled back one tier at a time until a set is accepted rather than
+        // all-or-nothing.
         std::vector<XrActionSuggestedBinding> handBindings = {
             {mActionHandRecenter, path("/user/hand/right/input/pinch_ext/value")},
             {mActionHandPassthrough, path("/user/hand/left/input/pinch_ext/value")},
-            // aim_activate is the extension's own "act on what I am pointing at", which is
-            // narrower than the grasp this file otherwise refuses to bind: it only does
-            // anything while the ray is on a panel, so it cannot go off in flight the way a
-            // global toggle would.
-            {mActionAim, path("/user/hand/left/input/aim_ext/pose")},
-            {mActionAim, path("/user/hand/right/input/aim_ext/pose")},
-            {mActionGrab, path("/user/hand/left/input/aim_activate_ext/value")},
-            {mActionGrab, path("/user/hand/right/input/aim_activate_ext/value")},
         };
+        const size_t baseOnly = handBindings.size();
+
+        // Pointing at an instrument to move it. aim_activate is the extension's own "act on
+        // what I am pointing at", which is narrower than the grasp this file otherwise
+        // refuses to bind: it does nothing until the ray lands on a panel, so it cannot go
+        // off in flight the way a global toggle would. The pose is the plain aim/pose - the
+        // extension adds aim_activate_ext, pinch_ext and grasp_ext, but reuses the standard
+        // pose paths, and asking for an aim_ext/pose gets XR_ERROR_PATH_UNSUPPORTED.
+        handBindings.push_back({mActionAim, path("/user/hand/left/input/aim/pose")});
+        handBindings.push_back({mActionAim, path("/user/hand/right/input/aim/pose")});
+        handBindings.push_back(
+            {mActionGrab, path("/user/hand/left/input/aim_activate_ext/value")});
+        handBindings.push_back(
+            {mActionGrab, path("/user/hand/right/input/aim_activate_ext/value")});
+        const size_t withDrag = handBindings.size();
+
         // Thumb swipes along the index finger, for nudging the panel up and down without
         // spending pinch or grasp on it.
-        const size_t withoutMicrogestures = handBindings.size();
         if (mHasMicrogestures)
         {
             handBindings.push_back(
@@ -1238,29 +1250,43 @@ bool XrGoggleSession::createActions()
         mHandProfilePath         = path("/interaction_profiles/ext/hand_interaction_ext");
         hands.interactionProfile = mHandProfilePath;
         hands.suggestedBindings  = handBindings.data();
-        hands.countSuggestedBindings = (uint32_t) handBindings.size();
-        XrResult r = xrSuggestInteractionProfileBindings(mInstance, &hands);
-        if (XR_FAILED(r) && handBindings.size() != withoutMicrogestures)
+
+        const struct
         {
-            // Suggestions are atomic per profile, so one bad path would cost the working
-            // pinch/grasp bindings too. Drop the microgestures and keep those.
+            size_t      count;
+            const char* what;
+        } tiers[] = {
+            {handBindings.size(), "held pinch + drag + microgesture height"},
+            {withDrag, "held pinch + drag"},
+            {baseOnly, "held pinch"},
+        };
+
+        XrResult r = XR_ERROR_PATH_UNSUPPORTED;
+        for (const auto& tier : tiers)
+        {
+            // Skip a tier that is not smaller than one already tried.
+            if (tier.count > handBindings.size()) continue;
+            hands.countSuggestedBindings = (uint32_t) tier.count;
+            r                            = xrSuggestInteractionProfileBindings(mInstance, &hands);
+            if (XR_SUCCEEDED(r))
+            {
+                // Record what actually took, so the frame loop does not wait on input that
+                // was never bound.
+                mHasMicrogestures = tier.count > withDrag;
+                mHandDragBound    = tier.count > baseOnly;
+                LOGI("hand interaction bindings suggested (%s)", tier.what);
+                break;
+            }
             char name[XR_MAX_RESULT_STRING_SIZE] = {0};
             xrResultToString(mInstance, r, name);
-            LOGW("microgesture bindings rejected (%s), retrying without them", name);
-            mHasMicrogestures            = false;
-            hands.countSuggestedBindings = (uint32_t) withoutMicrogestures;
-            r                            = xrSuggestInteractionProfileBindings(mInstance, &hands);
+            LOGW("hand bindings for \"%s\" rejected (%s), trying a smaller set", tier.what,
+                 name);
         }
         if (XR_FAILED(r))
         {
-            char name[XR_MAX_RESULT_STRING_SIZE] = {0};
-            xrResultToString(mInstance, r, name);
-            LOGW("hand interaction bindings rejected: %s", name);
-        }
-        else
-        {
-            LOGI("hand interaction bindings suggested (held pinch%s)",
-                 mHasMicrogestures ? " + microgesture height" : "");
+            mHasMicrogestures = false;
+            mHandDragBound    = false;
+            LOGW("no hand interaction bindings accepted at all - hands do nothing");
         }
     }
 
