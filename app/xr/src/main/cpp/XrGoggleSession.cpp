@@ -692,6 +692,27 @@ XrVector3f quatRotate(const XrQuaternionf& q, const XrVector3f& v)
 }
 
 constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+constexpr float kRad2Deg = 180.0f / 3.14159265358979323846f;
+
+XrQuaternionf quatConj(const XrQuaternionf& q)
+{
+    return XrQuaternionf{-q.x, -q.y, -q.z, q.w};
+}
+
+// The yaw and pitch of a direction, in the same convention the layout table uses: yaw
+// positive to the right, pitch positive up, both zero looking straight down -Z.
+void dirToYawPitch(const XrVector3f& d, float* yawDeg, float* pitchDeg)
+{
+    const float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    if (len < 1e-6f)
+    {
+        *yawDeg   = 0.0f;
+        *pitchDeg = 0.0f;
+        return;
+    }
+    *yawDeg   = std::atan2(d.x, -d.z) * kRad2Deg;
+    *pitchDeg = std::asin(d.y / len) * kRad2Deg;
+}
 
 }  // namespace
 
@@ -738,6 +759,235 @@ void XrGoggleSession::describeOverlays()
     chart.tiltDeg       = 26.0f;
     chart.distance      = 1.25f;
     chart.widthM        = 0.54f;
+}
+
+bool XrGoggleSession::aimIsHand(int hand) const
+{
+    if (hand < 0 || hand > 1 || mHandProfilePath == XR_NULL_PATH) return false;
+    XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
+    if (XR_FAILED(xrGetCurrentInteractionProfile(mSession, mHandPath[hand], &state)))
+    {
+        return false;
+    }
+    return state.interactionProfile == mHandProfilePath;
+}
+
+void XrGoggleSession::overlaySizeM(const OverlayLayer& o, float dist, float videoWidthM,
+                                   float* w, float* h) const
+{
+    // A cylinder's width is its arc at that radius; a quad with no width of its own is as
+    // wide as the video.
+    *w = o.widthM > 0.0f ? o.widthM
+                         : (o.cylinder ? dist * o.centralAngleDeg * kDeg2Rad : videoWidthM);
+    *h = *w * (o.aspect > 0.0f ? o.aspect : (float) o.height / (float) o.width);
+}
+
+int XrGoggleSession::pickOverlay(const XrVector3f& rayOrigin, const XrVector3f& rayDir,
+                                 const XrQuaternionf& baseOri, const XrVector3f& origin,
+                                 float videoWidthM) const
+{
+    int   best  = -1;
+    float bestT = 1e9f;
+    for (int i = 0; i < OVERLAY_COUNT; ++i)
+    {
+        // The symbology is not up for rearranging: a horizon and a reticle only mean
+        // anything sitting exactly on the image, so it is deliberately not grabbable.
+        if (i == OVERLAY_SYMBOLOGY) continue;
+        const OverlayLayer& o = mOverlays[i];
+        if (o.swapchain == XR_NULL_HANDLE || !o.visible.load()) continue;
+
+        // Same construction as the compositor, so a panel is grabbable where it is drawn.
+        const float dist = o.distance > 0.0f ? o.distance : mQuadDistance.load();
+        const XrQuaternionf facing =
+            quatMul(quatMul(baseOri, quatAboutY(-o.yawDeg * kDeg2Rad)),
+                    quatAboutX(o.pitchDeg * kDeg2Rad));
+        const XrVector3f offset = quatRotate(facing, XrVector3f{0.0f, 0.0f, -dist});
+        const XrVector3f centre{origin.x + offset.x, origin.y + offset.y, origin.z + offset.z};
+        const XrQuaternionf orient = quatMul(facing, quatAboutX(o.tiltDeg * kDeg2Rad));
+
+        // Ray against the panel's plane rather than a comparison of angles: a laid-back
+        // panel subtends less than its size suggests, and an angular test would let you
+        // grab empty air above the map.
+        const XrVector3f normal = quatRotate(orient, XrVector3f{0.0f, 0.0f, 1.0f});
+        const float denom = rayDir.x * normal.x + rayDir.y * normal.y + rayDir.z * normal.z;
+        if (std::fabs(denom) < 1e-4f) continue;  // ray runs along the panel
+        const XrVector3f toCentre{centre.x - rayOrigin.x, centre.y - rayOrigin.y,
+                                  centre.z - rayOrigin.z};
+        const float t =
+            (toCentre.x * normal.x + toCentre.y * normal.y + toCentre.z * normal.z) / denom;
+        // Behind the hand, or further away than something already hit.
+        if (t <= 0.05f || t >= bestT) continue;
+
+        const XrVector3f hit{rayOrigin.x + rayDir.x * t, rayOrigin.y + rayDir.y * t,
+                             rayOrigin.z + rayDir.z * t};
+        const XrVector3f local =
+            quatRotate(quatConj(orient),
+                       XrVector3f{hit.x - centre.x, hit.y - centre.y, hit.z - centre.z});
+        float w = 0.0f;
+        float h = 0.0f;
+        overlaySizeM(o, dist, videoWidthM, &w, &h);
+        // A little grace around the edge, because an edge is exactly where you aim to take
+        // hold of something and a pointing ray is not steady to the millimetre.
+        static constexpr float kGrabPad = 0.02f;
+        if (std::fabs(local.x) <= w * 0.5f + kGrabPad &&
+            std::fabs(local.y) <= h * 0.5f + kGrabPad)
+        {
+            best  = i;
+            bestT = t;
+        }
+    }
+    return best;
+}
+
+void XrGoggleSession::updateOverlayDrag(JNIEnv* env, jobject listener,
+                                        const XrQuaternionf& baseOri, const XrVector3f& origin,
+                                        XrSpace space, XrTime time, float videoWidthM)
+{
+    jclass    cls = listener != nullptr ? env->GetObjectClass(listener) : nullptr;
+    jmethodID onGrab =
+        cls != nullptr ? env->GetMethodID(cls, "onXrOverlayGrab", "(IZ)V") : nullptr;
+    jmethodID onMoved =
+        cls != nullptr ? env->GetMethodID(cls, "onXrOverlayMoved", "(IFFFFF)V") : nullptr;
+
+    const auto letGo = [&]()
+    {
+        if (mDragOverlay < 0) return;
+        const int           id = mDragOverlay;
+        const OverlayLayer& o  = mOverlays[id];
+        mDragOverlay           = -1;
+        mDragHand              = -1;
+        requestHaptic(0.25f, 20);
+        if (onGrab != nullptr)
+        {
+            env->CallVoidMethod(listener, onGrab, (jint) id, (jboolean) JNI_FALSE);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+        // Reported on release rather than every frame: this ends up in SharedPreferences,
+        // and a drag is a hundred frames of writes if it is not.
+        if (onMoved != nullptr)
+        {
+            env->CallVoidMethod(listener, onMoved, (jint) id, (jfloat) o.yawDeg,
+                                (jfloat) o.pitchDeg, (jfloat) o.tiltDeg, (jfloat) o.distance,
+                                (jfloat) o.widthM);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+        LOGI("%s placed at yaw %.1f pitch %.1f dist %.2f width %.2f", o.name, o.yawDeg,
+             o.pitchDeg, o.distance, o.widthM);
+    };
+
+    if (!mDragEnabled.load() || mActionGrab == XR_NULL_HANDLE)
+    {
+        letGo();
+        return;
+    }
+
+    // Keep following the hand that took hold; otherwise consider both.
+    const int first = mDragHand >= 0 ? mDragHand : 0;
+    const int last  = mDragHand >= 0 ? mDragHand : 1;
+    for (int i = first; i <= last; ++i)
+    {
+        if (mAimSpace[i] == XR_NULL_HANDLE) continue;
+        // A hand may only drag when hand input is allowed at all - the same rule the
+        // gestures follow, and for the same reason: a pilot's hands are on the sticks.
+        if (aimIsHand(i) && !mHandInputEnabled.load()) continue;
+
+        XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
+        get.action        = mActionGrab;
+        get.subactionPath = mHandPath[i];
+        XrActionStateBoolean grabState{XR_TYPE_ACTION_STATE_BOOLEAN};
+        if (XR_FAILED(xrGetActionStateBoolean(mSession, &get, &grabState))) continue;
+        if (!grabState.isActive) continue;
+
+        if (!grabState.currentState)
+        {
+            if (mDragHand == i) letGo();
+            continue;
+        }
+
+        XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+        if (XR_FAILED(xrLocateSpace(mAimSpace[i], space, time, &loc))) continue;
+        static constexpr XrSpaceLocationFlags kNeeded =
+            XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
+        if ((loc.locationFlags & kNeeded) != kNeeded) continue;
+
+        const XrVector3f rayOrigin = loc.pose.position;
+        const XrVector3f rayDir =
+            quatRotate(loc.pose.orientation, XrVector3f{0.0f, 0.0f, -1.0f});
+
+        if (mDragOverlay < 0)
+        {
+            const int hit = pickOverlay(rayOrigin, rayDir, baseOri, origin, videoWidthM);
+            // A trigger aimed at nothing keeps its old meaning, which is pulling the video
+            // nearer - that is the whole reason this can share the trigger.
+            if (hit < 0) continue;
+            mDragOverlay = hit;
+            mDragHand    = i;
+            requestHaptic(0.5f, 25);
+            if (onGrab != nullptr)
+            {
+                env->CallVoidMethod(listener, onGrab, (jint) hit, (jboolean) JNI_TRUE);
+                if (env->ExceptionCheck()) env->ExceptionClear();
+            }
+            LOGI("grabbed the %s layer with the %s hand", mOverlays[hit].name,
+                 i == 0 ? "left" : "right");
+        }
+
+        // The ray in the frame the layout is written in, so its angles are the table's.
+        float rayYaw   = 0.0f;
+        float rayPitch = 0.0f;
+        dirToYawPitch(quatRotate(quatConj(baseOri), rayDir), &rayYaw, &rayPitch);
+
+        OverlayLayer& o = mOverlays[mDragOverlay];
+        if (mDragHand == i && grabState.changedSinceLastSync)
+        {
+            // Take the offset on the frame the grab starts, so the panel keeps the spot you
+            // took hold of instead of snapping its middle onto the pointer.
+            mDragYawOffset   = rayYaw - o.yawDeg;
+            mDragPitchOffset = rayPitch - o.pitchDeg;
+        }
+        // Clamped rather than free: a panel dragged behind the pilot or into the floor is
+        // gone, with nothing left to point at to get it back.
+        o.yawDeg   = clampf(rayYaw - mDragYawOffset, -80.0f, 80.0f);
+        o.pitchDeg = clampf(rayPitch - mDragPitchOffset, -70.0f, 45.0f);
+    }
+}
+
+void XrGoggleSession::setOverlayPose(int id, float yawDeg, float pitchDeg, float tiltDeg,
+                                     float distance, float widthM)
+{
+    if (id < 0 || id >= OVERLAY_COUNT || id == OVERLAY_SYMBOLOGY) return;
+    OverlayLayer& o = mOverlays[id];
+    if (std::isfinite(yawDeg)) o.yawDeg = clampf(yawDeg, -80.0f, 80.0f);
+    if (std::isfinite(pitchDeg)) o.pitchDeg = clampf(pitchDeg, -70.0f, 45.0f);
+    if (std::isfinite(tiltDeg)) o.tiltDeg = clampf(tiltDeg, -80.0f, 80.0f);
+    // A non-positive value keeps the built-in one, which is how a layout saved before a
+    // field existed still restores cleanly.
+    if (std::isfinite(distance) && distance > 0.0f) o.distance = clampf(distance, 0.6f, 4.0f);
+    if (std::isfinite(widthM) && widthM > 0.0f) o.widthM = clampf(widthM, 0.15f, 1.6f);
+}
+
+bool XrGoggleSession::overlayPose(int id, float* yawDeg, float* pitchDeg, float* tiltDeg,
+                                  float* distance, float* widthM) const
+{
+    if (id < 0 || id >= OVERLAY_COUNT) return false;
+    const OverlayLayer& o = mOverlays[id];
+    if (yawDeg != nullptr) *yawDeg = o.yawDeg;
+    if (pitchDeg != nullptr) *pitchDeg = o.pitchDeg;
+    if (tiltDeg != nullptr) *tiltDeg = o.tiltDeg;
+    if (distance != nullptr) *distance = o.distance;
+    if (widthM != nullptr) *widthM = o.widthM;
+    return true;
+}
+
+void XrGoggleSession::resetOverlayLayout()
+{
+    // describeOverlays() owns the arrangement, so resetting is re-running it. It rewrites
+    // the pixel sizes and names as well, which are the values the swapchains were made with
+    // anyway.
+    describeOverlays();
+    mDragOverlay = -1;
+    mDragHand    = -1;
+    LOGI("instrument layout reset to the built-in arrangement");
 }
 
 bool XrGoggleSession::createSwapchain(JNIEnv* env)
@@ -825,6 +1075,38 @@ bool XrGoggleSession::createActions()
         return false;
     }
 
+    // Where a controller is pointing, so an instrument can be picked out of the arrangement.
+    // Aim rather than grip: aim is the runtime's own pointing ray, already corrected for how
+    // a Touch controller sits in the hand, and it is what every other Quest UI points with.
+    XrActionCreateInfo aim{XR_TYPE_ACTION_CREATE_INFO};
+    aim.actionType = XR_ACTION_TYPE_POSE_INPUT;
+    std::strncpy(aim.actionName, "aim", XR_MAX_ACTION_NAME_SIZE - 1);
+    std::strncpy(aim.localizedActionName, "Pointing direction", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+    mHandPath[0] = path("/user/hand/left");
+    mHandPath[1] = path("/user/hand/right");
+    const XrPath handPaths[2] = {mHandPath[0], mHandPath[1]};
+    aim.countSubactionPaths = 2;
+    aim.subactionPaths      = handPaths;
+    if (!check(xrCreateAction(mActionSet, &aim, &mActionAim), "xrCreateAction(aim)"))
+    {
+        return false;
+    }
+
+    // Bound to the same trigger the float action reads. Two actions on one source is legal,
+    // and it is what lets the trigger mean "take hold of that" when it is aimed at a panel
+    // and keep meaning "pull the video nearer" when it is not. Per hand, so the drag can
+    // follow whichever controller started it.
+    XrActionCreateInfo grab{XR_TYPE_ACTION_CREATE_INFO};
+    grab.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    std::strncpy(grab.actionName, "grab", XR_MAX_ACTION_NAME_SIZE - 1);
+    std::strncpy(grab.localizedActionName, "Grab an instrument", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+    grab.countSubactionPaths = 2;
+    grab.subactionPaths      = handPaths;
+    if (!check(xrCreateAction(mActionSet, &grab, &mActionGrab), "xrCreateAction(grab)"))
+    {
+        return false;
+    }
+
     XrActionCreateInfo haptic{XR_TYPE_ACTION_CREATE_INFO};
     haptic.actionType = XR_ACTION_TYPE_VIBRATION_OUTPUT;
     std::strncpy(haptic.actionName, "haptic", XR_MAX_ACTION_NAME_SIZE - 1);
@@ -864,6 +1146,10 @@ bool XrGoggleSession::createActions()
         {mActionExit, path("/user/hand/left/input/menu/click")},
         {mActionHaptic, path("/user/hand/left/output/haptic")},
         {mActionHaptic, path("/user/hand/right/output/haptic")},
+        {mActionAim, path("/user/hand/left/input/aim/pose")},
+        {mActionAim, path("/user/hand/right/input/aim/pose")},
+        {mActionGrab, path("/user/hand/left/input/trigger/value")},
+        {mActionGrab, path("/user/hand/right/input/trigger/value")},
     };
     XrInteractionProfileSuggestedBinding touch{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     touch.interactionProfile = path("/interaction_profiles/oculus/touch_controller");
@@ -880,6 +1166,8 @@ bool XrGoggleSession::createActions()
         {mActionPassthrough, path("/user/hand/left/input/select/click")},
         {mActionHaptic, path("/user/hand/left/output/haptic")},
         {mActionHaptic, path("/user/hand/right/output/haptic")},
+        {mActionAim, path("/user/hand/left/input/aim/pose")},
+        {mActionAim, path("/user/hand/right/input/aim/pose")},
     };
     XrInteractionProfileSuggestedBinding simple{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     simple.interactionProfile = path("/interaction_profiles/khr/simple_controller");
@@ -902,6 +1190,14 @@ bool XrGoggleSession::createActions()
         std::vector<XrActionSuggestedBinding> handBindings = {
             {mActionHandRecenter, path("/user/hand/right/input/pinch_ext/value")},
             {mActionHandPassthrough, path("/user/hand/left/input/pinch_ext/value")},
+            // aim_activate is the extension's own "act on what I am pointing at", which is
+            // narrower than the grasp this file otherwise refuses to bind: it only does
+            // anything while the ray is on a panel, so it cannot go off in flight the way a
+            // global toggle would.
+            {mActionAim, path("/user/hand/left/input/aim_ext/pose")},
+            {mActionAim, path("/user/hand/right/input/aim_ext/pose")},
+            {mActionGrab, path("/user/hand/left/input/aim_activate_ext/value")},
+            {mActionGrab, path("/user/hand/right/input/aim_activate_ext/value")},
         };
         // Thumb swipes along the index finger, for nudging the panel up and down without
         // spending pinch or grasp on it.
@@ -918,7 +1214,8 @@ bool XrGoggleSession::createActions()
         }
 
         XrInteractionProfileSuggestedBinding hands{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
-        hands.interactionProfile = path("/interaction_profiles/ext/hand_interaction_ext");
+        mHandProfilePath         = path("/interaction_profiles/ext/hand_interaction_ext");
+        hands.interactionProfile = mHandProfilePath;
         hands.suggestedBindings  = handBindings.data();
         hands.countSuggestedBindings = (uint32_t) handBindings.size();
         XrResult r = xrSuggestInteractionProfileBindings(mInstance, &hands);
@@ -949,7 +1246,27 @@ bool XrGoggleSession::createActions()
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
     attach.countActionSets = 1;
     attach.actionSets      = &mActionSet;
-    return check(xrAttachSessionActionSets(mSession, &attach), "xrAttachSessionActionSets");
+    if (!check(xrAttachSessionActionSets(mSession, &attach), "xrAttachSessionActionSets"))
+    {
+        return false;
+    }
+
+    // One space per hand for the pointing ray. A failure here is not fatal: it costs the
+    // ability to rearrange the instruments and nothing else.
+    for (int i = 0; i < 2; ++i)
+    {
+        XrActionSpaceCreateInfo spaceInfo{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+        spaceInfo.action            = mActionAim;
+        spaceInfo.subactionPath     = handPaths[i];
+        spaceInfo.poseInActionSpace = XrPosef{{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
+        if (XR_FAILED(xrCreateActionSpace(mSession, &spaceInfo, &mAimSpace[i])))
+        {
+            LOGW("no aim space for the %s hand - instruments cannot be dragged with it",
+                 i == 0 ? "left" : "right");
+            mAimSpace[i] = XR_NULL_HANDLE;
+        }
+    }
+    return true;
 }
 
 bool XrGoggleSession::createPassthrough()
@@ -1438,16 +1755,48 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
         XrActionStateVector2f stickState{XR_TYPE_ACTION_STATE_VECTOR2F};
         if (XR_SUCCEEDED(xrGetActionStateVector2f(mSession, &get, &stickState)) && stickState.isActive)
         {
-            // Either thumbstick: up/down raises the panel, left/right resizes it.
+            // Either thumbstick: up/down raises the panel, left/right resizes it. While an
+            // instrument is held, the same stick sizes and distances that instrument instead
+            // - it is the thing being placed, so it is the thing the controls act on.
             const float y = stickState.currentState.y;
-            if (std::fabs(y) > kStickDeadzone)
-            {
-                setQuadHeightOffset(mQuadHeightOffset.load() + y * kHeightPerSec * dt);
-            }
             const float x = stickState.currentState.x;
-            if (std::fabs(x) > kStickDeadzone)
+            if (mDragOverlay >= 0 && mDragOverlay < OVERLAY_COUNT)
             {
-                setQuadWidth(mQuadWidth.load() + x * kWidthPerSec * dt);
+                OverlayLayer& held = mOverlays[mDragOverlay];
+                if (std::fabs(y) > kStickDeadzone)
+                {
+                    const float base = held.distance > 0.0f ? held.distance : mQuadDistance.load();
+                    held.distance    = clampf(base - y * kDistancePerSec * dt, 0.6f, 4.0f);
+                }
+                if (std::fabs(x) > kStickDeadzone)
+                {
+                    if (held.cylinder)
+                    {
+                        // A cylinder's size is the angle it wraps through, not a width.
+                        held.centralAngleDeg =
+                            clampf(held.centralAngleDeg + x * 20.0f * dt, 10.0f, 80.0f);
+                    }
+                    else
+                    {
+                        const float dist =
+                            held.distance > 0.0f ? held.distance : mQuadDistance.load();
+                        float w = 0.0f;
+                        float h = 0.0f;
+                        overlaySizeM(held, dist, mQuadWidth.load(), &w, &h);
+                        held.widthM = clampf(w + x * kWidthPerSec * dt, 0.15f, 1.6f);
+                    }
+                }
+            }
+            else
+            {
+                if (std::fabs(y) > kStickDeadzone)
+                {
+                    setQuadHeightOffset(mQuadHeightOffset.load() + y * kHeightPerSec * dt);
+                }
+                if (std::fabs(x) > kStickDeadzone)
+                {
+                    setQuadWidth(mQuadWidth.load() + x * kWidthPerSec * dt);
+                }
             }
         }
     }
@@ -1466,7 +1815,10 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
             distanceRate += (i == 0 ? -1.0f : 1.0f) * axisState.currentState;
         }
     }
-    if (std::fabs(distanceRate) > 0.0f)
+    // Not while an instrument is held: that same trigger is what is holding it. The grab
+    // is detected in the frame loop, one step after this, so the frame a drag begins still
+    // leaks a single tick - about four millimetres, which is not worth machinery to avoid.
+    if (std::fabs(distanceRate) > 0.0f && mDragOverlay < 0)
     {
         setQuadDistance(mQuadDistance.load() + distanceRate * kDistancePerSec * dt);
     }
@@ -1584,6 +1936,11 @@ void XrGoggleSession::renderFrame(JNIEnv* env, jobject listener)
                                 mAnchorPose.position.y + heightOffset,
                                 mAnchorPose.position.z};
 
+    // Before composing, so a panel taken hold of this frame is drawn where it was moved to
+    // rather than a frame behind the pointer.
+    updateOverlayDrag(env, listener, baseOri, origin, quad.space,
+                      frameState.predictedDisplayTime, widthM);
+
     // Straight alpha, because Canvas hands out straight alpha: whatever an overlay leaves
     // transparent has to show what is behind it rather than blacken it.
     static constexpr XrCompositionLayerFlags kOverlayFlags =
@@ -1642,10 +1999,9 @@ void XrGoggleSession::renderFrame(JNIEnv* env, jobject listener)
         {
             // A curved layer asked for on a runtime without the extension falls back to flat,
             // which only looks less dimensional.
-            const float w =
-                o.widthM > 0.0f ? o.widthM
-                                : (o.cylinder ? dist * o.centralAngleDeg * kDeg2Rad : widthM);
-            const float h = w * (o.aspect > 0.0f ? o.aspect : (float) o.height / (float) o.width);
+            float w = 0.0f;
+            float h = 0.0f;
+            overlaySizeM(o, dist, widthM, &w, &h);
 
             XrCompositionLayerQuad& q = overlayQuads[i];
             q               = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};

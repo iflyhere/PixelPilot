@@ -115,6 +115,9 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     static final String PREF_QUAD_WIDTH = "xr_quad_width";
     static final String PREF_QUAD_DISTANCE = "xr_quad_distance";
     static final String PREF_QUAD_HEIGHT = "xr_quad_height";
+    static final String PREF_OVERLAY_DRAG = "xr_overlay_drag";
+    /** One entry per layer and field, e.g. {@code xr_layout_2_yaw}. See saveOverlayPose(). */
+    static final String PREF_LAYOUT_PREFIX = "xr_layout_";
     static final String PREF_LAST_VIDEO_W = "xr_last_video_width";
     static final String PREF_LAST_VIDEO_H = "xr_last_video_height";
 
@@ -214,6 +217,44 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         xr.setQuadWidth(prefs.getFloat(PREF_QUAD_WIDTH, 2.2f));
         xr.setQuadDistance(prefs.getFloat(PREF_QUAD_DISTANCE, 1.6f));
         xr.setQuadHeightOffset(prefs.getFloat(PREF_QUAD_HEIGHT, 0f));
+        // On by default, unlike the hand gestures: a trigger pull aimed at one panel is a
+        // deliberate act, and it only takes hold when the ray is actually on something.
+        xr.setOverlayDragEnabled(prefs.getBoolean(PREF_OVERLAY_DRAG, true));
+    }
+
+    /**
+     * Puts a saved arrangement back.
+     *
+     * <p>Has to run after the session is up: the native side lays out its own defaults while
+     * creating the layer swapchains, so anything set before that is overwritten.
+     */
+    private void restoreOverlayLayout() {
+        final SharedPreferences prefs = prefs();
+        for (int id = 0; id < XrGoggleSession.OVERLAY_COUNT; id++) {
+            final String key = PREF_LAYOUT_PREFIX + id + "_";
+            if (!prefs.contains(key + "yaw")) {
+                continue;  // never moved, so the built-in placement stands
+            }
+            xr.setOverlayPose(id,
+                    prefs.getFloat(key + "yaw", Float.NaN),
+                    prefs.getFloat(key + "pitch", Float.NaN),
+                    prefs.getFloat(key + "tilt", Float.NaN),
+                    prefs.getFloat(key + "dist", 0f),
+                    prefs.getFloat(key + "width", 0f));
+            Log.i(TAG, "restored the layout of overlay " + id);
+        }
+    }
+
+    /** Forgets every moved position, so the next session starts from the built-in layout. */
+    static void clearSavedLayout(SharedPreferences prefs) {
+        final SharedPreferences.Editor edit = prefs.edit();
+        for (int id = 0; id < XrGoggleSession.OVERLAY_COUNT; id++) {
+            final String key = PREF_LAYOUT_PREFIX + id + "_";
+            for (String field : new String[]{"yaw", "pitch", "tilt", "dist", "width"}) {
+                edit.remove(key + field);
+            }
+        }
+        edit.apply();
     }
 
     @Override
@@ -337,6 +378,9 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             }
         }
         applyRefreshRatePreference();
+        // Only now: the native side lays out its own default arrangement while it creates the
+        // layer swapchains, so a saved one has to go in after that rather than before.
+        restoreOverlayLayout();
         statusView.setVisibility(View.GONE);
         linkStarted = true;
     }
@@ -353,6 +397,27 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         if (wanted > 0f) {
             xr.requestRefreshRate(wanted);
         }
+    }
+
+    @Override
+    public void onXrOverlayGrab(int id, boolean grabbed) {
+        if (id >= 0 && id < overlays.length && overlays[id] != null) {
+            overlays[id].setGrabbed(grabbed);
+        }
+    }
+
+    @Override
+    public void onXrOverlayMoved(int id, float yawDeg, float pitchDeg, float tiltDeg,
+                                 float distance, float widthM) {
+        // Called on release rather than per frame, so writing straight through is fine.
+        final String key = PREF_LAYOUT_PREFIX + id + "_";
+        prefs().edit()
+                .putFloat(key + "yaw", yawDeg)
+                .putFloat(key + "pitch", pitchDeg)
+                .putFloat(key + "tilt", tiltDeg)
+                .putFloat(key + "dist", distance)
+                .putFloat(key + "width", widthM)
+                .apply();
     }
 
     @Override

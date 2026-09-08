@@ -78,6 +78,27 @@ JNI_METHOD(jint, nativeGetOverlayHeight)(JNIEnv* env, jclass clazz, jlong handle
     return native(handle)->overlayHeight(id);
 }
 
+JNI_METHOD(void, nativeSetOverlayDragEnabled)
+(JNIEnv* env, jclass clazz, jlong handle, jboolean enabled)
+{
+    if (native(handle) == nullptr) return;
+    native(handle)->setOverlayDragEnabled(enabled == JNI_TRUE);
+}
+
+JNI_METHOD(void, nativeSetOverlayPose)
+(JNIEnv* env, jclass clazz, jlong handle, jint id, jfloat yawDeg, jfloat pitchDeg,
+ jfloat tiltDeg, jfloat distance, jfloat widthM)
+{
+    if (native(handle) == nullptr) return;
+    native(handle)->setOverlayPose(id, yawDeg, pitchDeg, tiltDeg, distance, widthM);
+}
+
+JNI_METHOD(void, nativeResetOverlayLayout)(JNIEnv* env, jclass clazz, jlong handle)
+{
+    if (native(handle) == nullptr) return;
+    native(handle)->resetOverlayLayout();
+}
+
 JNI_METHOD(void, nativeSetHandInputEnabled)
 (JNIEnv* env, jclass clazz, jlong handle, jboolean enabled)
 {

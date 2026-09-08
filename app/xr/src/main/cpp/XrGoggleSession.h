@@ -124,6 +124,33 @@ class XrGoggleSession
         if (id >= 0 && id < OVERLAY_COUNT) mOverlays[id].visible.store(visible);
     }
 
+    /**
+     * Whether pointing at an instrument and squeezing may move it.
+     *
+     * <p>On by default, unlike hand input: a trigger pull aimed at a particular panel is a
+     * deliberate act, where a hand gesture is something the recogniser decides you did. The
+     * switch exists because the trigger already pulls the video nearer, and a pilot who never
+     * rearranges anything should be able to have that back unconditionally.
+     */
+    void setOverlayDragEnabled(bool enabled) { mDragEnabled.store(enabled); }
+
+    bool overlayDragEnabled() const { return mDragEnabled.load(); }
+
+    /**
+     * Places a layer, in the same units as the layout table: degrees, and metres for the
+     * last two. A non-finite or non-positive size or distance means "leave that one alone",
+     * so a caller restoring a saved layout does not have to know the defaults.
+     */
+    void setOverlayPose(int id, float yawDeg, float pitchDeg, float tiltDeg, float distance,
+                        float widthM);
+
+    /** Reads a layer's placement back, for saving it. Returns false for an unknown id. */
+    bool overlayPose(int id, float* yawDeg, float* pitchDeg, float* tiltDeg, float* distance,
+                     float* widthM) const;
+
+    /** Back to the built-in arrangement. */
+    void resetOverlayLayout();
+
 
     std::string lastError();
 
@@ -221,6 +248,47 @@ class XrGoggleSession
     OverlayLayer mOverlays[OVERLAY_COUNT];
     bool         mHasCylinder = false;
 
+    // --- moving an instrument by pointing at it -----------------------------------
+    // The layout lives in the same spherical coordinates the table is written in, which is
+    // what makes this cheap: an aim ray converts straight to a yaw and a pitch, so dragging
+    // is two subtractions rather than a scene graph.
+    std::atomic<bool> mDragEnabled{true};
+    // Which layer is being held, or -1. Written and read only by the frame loop.
+    int   mDragOverlay  = -1;
+    // The angle between the ray and the layer's centre when it was grabbed, so the panel
+    // keeps the point you took hold of instead of snapping its middle to the pointer.
+    float mDragYawOffset   = 0.0f;
+    float mDragPitchOffset = 0.0f;
+    // Which hand took hold, so a two-controller session keeps following the one that grabbed.
+    int   mDragHand        = -1;
+
+    /**
+     * Moves the held layer, or takes hold of one. Runs inside the frame loop because it
+     * needs the same anchor the overlays are composed against.
+     */
+    void updateOverlayDrag(JNIEnv* env, jobject listener, const XrQuaternionf& baseOri,
+                           const XrVector3f& origin, XrSpace space, XrTime time,
+                           float videoWidthM);
+
+    /** Which visible layer an aim ray hits first, or -1. */
+    int  pickOverlay(const XrVector3f& rayOrigin, const XrVector3f& rayDir,
+                     const XrQuaternionf& baseOri, const XrVector3f& origin,
+                     float videoWidthM) const;
+
+    /**
+     * A layer's size in metres. Shared by the compositor and the hit test on purpose: two
+     * copies of this would let you grab a panel somewhere other than where it is drawn.
+     */
+    void overlaySizeM(const OverlayLayer& o, float dist, float videoWidthM, float* w,
+                      float* h) const;
+
+    /**
+     * Whether that side is currently a tracked hand rather than a controller. The aim and
+     * grab actions are bound on both profiles, so this is what keeps a hand drag behind the
+     * same switch the gestures are behind while leaving controllers alone.
+     */
+    bool aimIsHand(int hand) const;
+
 
     XrPassthroughFB      mPassthrough      = XR_NULL_HANDLE;
     XrPassthroughLayerFB mPassthroughLayer = XR_NULL_HANDLE;
@@ -240,6 +308,12 @@ class XrGoggleSession
     XrAction    mActionLower        = XR_NULL_HANDLE;
     XrAction    mActionExit         = XR_NULL_HANDLE;
     XrAction    mActionHaptic       = XR_NULL_HANDLE;
+    XrAction    mActionAim          = XR_NULL_HANDLE;
+    XrAction    mActionGrab         = XR_NULL_HANDLE;
+    // One per hand, so either controller can do the pointing.
+    XrSpace     mAimSpace[2]        = {XR_NULL_HANDLE, XR_NULL_HANDLE};
+    XrPath      mHandPath[2]        = {XR_NULL_PATH, XR_NULL_PATH};
+    XrPath      mHandProfilePath    = XR_NULL_PATH;
 
     // --- EGL ----------------------------------------------------------------------
     EGLDisplay mEglDisplay = EGL_NO_DISPLAY;

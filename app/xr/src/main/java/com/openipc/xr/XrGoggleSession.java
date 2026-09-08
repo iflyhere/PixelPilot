@@ -79,6 +79,24 @@ public final class XrGoggleSession {
         /** One of the BUTTON_* constants was pressed on a controller. */
         void onXrButton(int button);
 
+        /**
+         * An instrument was taken hold of, or let go of. Worth showing on the layer itself:
+         * without it there is no way to tell which panel the pointer caught.
+         *
+         * @param id one of the {@code OVERLAY_*} constants
+         */
+        void onXrOverlayGrab(int id, boolean grabbed);
+
+        /**
+         * Where an instrument ended up, once it was let go. Sent on release rather than
+         * every frame, so this is the point at which a layout is worth saving.
+         *
+         * <p>Angles in degrees, the last two in metres. A distance or width of zero means the
+         * layer is still following the video rather than carrying its own.
+         */
+        void onXrOverlayMoved(int id, float yawDeg, float pitchDeg, float tiltDeg,
+                              float distance, float widthM);
+
         /** Session ended. {@code error} is null for a normal stop. */
         void onXrStopped(@Nullable String error);
     }
@@ -233,6 +251,20 @@ public final class XrGoggleSession {
         main.post(() -> listener.onXrButton(button));
     }
 
+    /** Called from the XR frame loop thread. */
+    @Keep
+    void onXrOverlayGrab(int id, boolean grabbed) {
+        main.post(() -> listener.onXrOverlayGrab(id, grabbed));
+    }
+
+    /** Called from the XR frame loop thread. */
+    @Keep
+    void onXrOverlayMoved(int id, float yawDeg, float pitchDeg, float tiltDeg, float distance,
+                          float widthM) {
+        main.post(() -> listener.onXrOverlayMoved(id, yawDeg, pitchDeg, tiltDeg, distance,
+                widthM));
+    }
+
     // --- live settings ---------------------------------------------------------------
 
     public void setVideoResolution(int width, int height) {
@@ -241,6 +273,33 @@ public final class XrGoggleSession {
 
     public void setQuadDistance(float meters) {
         if (handle != 0) nativeSetQuadDistance(handle, meters);
+    }
+
+    /**
+     * Whether pointing at an instrument and pulling the trigger may move it. On by default.
+     *
+     * <p>Off gives the trigger back to the video distance unconditionally, which is what it
+     * did before any of this existed.
+     */
+    public void setOverlayDragEnabled(boolean enabled) {
+        if (handle != 0) nativeSetOverlayDragEnabled(handle, enabled);
+    }
+
+    /**
+     * Places an instrument, in the units {@link Listener#onXrOverlayMoved} reports. A
+     * distance or width of zero leaves the built-in value alone, so a layout saved before a
+     * field existed still restores.
+     */
+    public void setOverlayPose(int id, float yawDeg, float pitchDeg, float tiltDeg,
+                               float distance, float widthM) {
+        if (handle != 0) {
+            nativeSetOverlayPose(handle, id, yawDeg, pitchDeg, tiltDeg, distance, widthM);
+        }
+    }
+
+    /** Back to the built-in arrangement. */
+    public void resetOverlayLayout() {
+        if (handle != 0) nativeResetOverlayLayout(handle);
     }
 
     public void setQuadWidth(float meters) {
@@ -344,6 +403,14 @@ public final class XrGoggleSession {
     private static native void nativeSetOverlayVisible(long handle, int id, boolean visible);
 
     private static native void nativeSetHandInputEnabled(long handle, boolean enabled);
+
+    private static native void nativeSetOverlayDragEnabled(long handle, boolean enabled);
+
+    private static native void nativeSetOverlayPose(long handle, int id, float yawDeg,
+                                                    float pitchDeg, float tiltDeg,
+                                                    float distance, float widthM);
+
+    private static native void nativeResetOverlayLayout(long handle);
 
     private static native void nativeRunLoop(long handle, XrGoggleSession listener);
 

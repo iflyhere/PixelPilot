@@ -46,6 +46,10 @@ public abstract class XrOverlay {
     /** One layout unit: everything is expressed in these so a layer scales with its canvas. */
     protected final float u;
 
+    /** See setGrabbed(): written from the main thread, read on the draw thread. */
+    private volatile boolean grabbed;
+    private final Paint grabPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
     private final HandlerThread thread;
     private final Handler handler;
     private final long frameMs;
@@ -91,6 +95,25 @@ public abstract class XrOverlay {
     /** Draw one frame. The canvas is already cleared to fully transparent. */
     protected abstract void draw(Canvas canvas);
 
+    /**
+     * Whether this instrument is currently being moved. Drawn on top of whatever the
+     * subclass drew, because without it there is no way to tell which panel a pointing ray
+     * caught - they are transparent and there is no cursor out there.
+     */
+    public void setGrabbed(boolean held) {
+        grabbed = held;
+    }
+
+    /** A frame just inside the edge, in the accent colour, while the panel is held. */
+    private void outlineGrab(Canvas canvas) {
+        final float inset = Math.max(2f, u * 0.10f);
+        grabPaint.setStyle(Paint.Style.STROKE);
+        grabPaint.setStrokeWidth(Math.max(2.5f, u * 0.13f));
+        grabPaint.setColor(ACCENT);
+        canvas.drawRoundRect(inset, inset, width - inset, height - inset, u * 0.5f, u * 0.5f,
+                grabPaint);
+    }
+
     private void frame() {
         if (!running) {
             return;
@@ -101,6 +124,9 @@ public abstract class XrOverlay {
             if (canvas != null) {
                 canvas.drawColor(0, PorterDuff.Mode.CLEAR);
                 draw(canvas);
+                if (grabbed) {
+                    outlineGrab(canvas);
+                }
             }
         } catch (IllegalArgumentException | IllegalStateException e) {
             // The surface goes away when the session ends; stop rather than spin on it.
