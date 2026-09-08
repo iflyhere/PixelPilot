@@ -70,8 +70,15 @@ public class HudPreviewTest {
 
     private static final float BIAS = 100000f;
 
-    // The layer sizes describeOverlays() asks the runtime for. Kept here rather than read
-    // from the native side, because this test deliberately does not bring OpenXR up.
+    // The layout describeOverlays() sets, copied. It cannot be read from the native side
+    // without bringing a session up, which is the one thing this test exists to avoid - so
+    // this is a second copy, and a second copy drifts. The native side logs the whole table
+    // at session start for exactly this reason:
+    //
+    //     adb logcat -s pixelpilot-xr:I | grep "layout:"
+    //
+    // If those lines and these constants disagree, the pictures are lying and these are what
+    // is wrong.
     private static final int SYM_W = 2048, SYM_H = 1152;
     private static final int DASH_W = 1536, DASH_H = 1152;
     private static final int MAP_W = 640, MAP_H = 640;

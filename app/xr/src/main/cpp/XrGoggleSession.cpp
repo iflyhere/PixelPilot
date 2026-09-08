@@ -759,6 +759,19 @@ void XrGoggleSession::describeOverlays()
     chart.tiltDeg       = 26.0f;
     chart.distance      = 1.25f;
     chart.widthM        = 0.54f;
+
+    // Printed in full because the off-headset preview test carries its own copy of these
+    // numbers - it cannot ask for them without bringing a session up, and a preview that
+    // quietly disagrees with the real arrangement is worse than no preview. One grep for
+    // "layout:" says whether the two still match.
+    for (int i = 0; i < OVERLAY_COUNT; ++i)
+    {
+        const OverlayLayer& o = mOverlays[i];
+        LOGI("layout: %-10s %4dx%-4d yaw %6.1f pitch %6.1f tilt %5.1f dist %5.2f width %5.2f "
+             "aspect %4.2f%s",
+             o.name, o.width, o.height, o.yawDeg, o.pitchDeg, o.tiltDeg, o.distance, o.widthM,
+             o.aspect, o.cylinder ? " cylinder" : "");
+    }
 }
 
 bool XrGoggleSession::aimIsHand(int hand) const
