@@ -19,6 +19,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import com.openipc.mavlink.MavlinkData;
+import com.openipc.wfbngrtl8812.WfbNGStats;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -94,6 +95,9 @@ public class HudPreviewTest {
 
         final FlightData data = new FlightData();
         pushCameraHealth();
+        // The link card reads these, and the first version of this test never fed them - so
+        // the card came out empty and looked like a drawing bug rather than a missing input.
+        data.onLink(new WfbNGStats(184200, 3, 183900, 271, 12, 0, 0, 0, -62));
 
         // A whole flight rather than one frozen sample: the track, the height profile and the
         // climb rate are all history, and a single snapshot leaves them empty.
@@ -162,13 +166,15 @@ public class HudPreviewTest {
         final float t = step / 2f;                    // seconds
         final float progress = step / (float) STEPS;
 
-        final float altitude = (float) (120.0 * Math.sin(Math.PI * Math.min(1.0, progress * 1.15)));
-        final float climb = step == 0 ? 0f : (altitude - (float)
-                (120.0 * Math.sin(Math.PI * Math.min(1.0, (step - 1) / (float) STEPS * 1.15)))) * 2f;
-        final float speed = 4f + 14f * (float) Math.sin(Math.PI * progress);
-        // Out along a curve and back, so the track is worth looking at.
-        final double bearing = Math.toRadians(40.0 + 150.0 * progress);
-        final double range = 900.0 * Math.sin(Math.PI * progress);
+        // Climbing out and away, so the LAST frame - the one that gets rendered - is the
+        // interesting one. The first version came back and landed, which meant every picture
+        // showed nought metres and four metres a second.
+        final float altitude = alt(progress);
+        final float climb = step == 0 ? 0f : (altitude - alt((step - 1) / (float) STEPS)) * 2f;
+        final float speed = 3f + 16f * (float) Math.min(1.0, progress * 2.2);
+        // A curve rather than a straight line, so the track is worth looking at.
+        final double bearing = Math.toRadians(35.0 + 120.0 * progress);
+        final double range = 950.0 * (float) Math.pow(progress, 1.25);
         final double lat = HOME_LAT + range * Math.cos(bearing) / 111320.0;
         final double lon = HOME_LON + range * Math.sin(bearing)
                 / (111320.0 * Math.cos(Math.toRadians(HOME_LAT)));
@@ -194,6 +200,11 @@ public class HudPreviewTest {
                 42f + 30f * (float) Math.sin(Math.PI * progress),   // throttle
                 (byte) 1, (byte) 0, (byte) 3, (byte) 1, (byte) -62, (byte) 0,
                 "PixelPilot HUD preview");
+    }
+
+    /** Height above the arming point, easing off as it levels out. */
+    private static float alt(float progress) {
+        return (float) (135.0 * (1.0 - Math.exp(-3.2 * progress)));
     }
 
     /**
@@ -225,7 +236,9 @@ public class HudPreviewTest {
     private Bitmap render(XrOverlay overlay, int w, int h, String name) throws Exception {
         final Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         final Canvas canvas = new Canvas(bmp);
-        overlay.draw(canvas);
+        // renderOnce rather than draw: the grab outline is part of composing a frame, and
+        // calling draw alone silently left it out of every picture.
+        overlay.renderOnce(canvas);
 
         // Saved twice: the layer as it really is, transparent, and flattened onto a dark
         // ground so it can be looked at in a picture viewer without reading as empty.
@@ -247,15 +260,17 @@ public class HudPreviewTest {
      */
     private void cockpit(FlightData data, Bitmap sym, Bitmap dash, Bitmap map, Bitmap chart,
                          boolean grabbing, String name) throws Exception {
+        // Sized to roughly a Quest 3's field of view, 104 by 96 degrees. The first version
+        // was 1600x1000, which at that horizontal angle is only 73 degrees tall - and the
+        // instruments sit thirty degrees down, so it cut all three of them in half.
         final int outW = 1600;
-        final int outH = 1000;
-        // Quest 3 is about 110 degrees across; a little less keeps the panels off the edge.
-        final float f = (float) (outW / 2 / Math.tan(Math.toRadians(100.0) / 2));
+        final int outH = 1400;
+        final float f = (float) (outW / 2 / Math.tan(Math.toRadians(104.0) / 2));
         final Bitmap out = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
         final Canvas c = new Canvas(out);
 
         final FlightData.Snapshot s = data.snapshot();
-        skyAndGround(c, outW, outH, s);
+        videoStandIn(c, outW, outH);
 
         // The video quad, at its default placement, then the instruments on top.
         drawPanel(c, sym, 0f, 0f, 0f, 1.6f, 2.2f, sym.getHeight() / (float) sym.getWidth(), f,
@@ -277,20 +292,20 @@ public class HudPreviewTest {
         write(out, name + ".png");
     }
 
-    /** A stand-in for the video, at the attitude the symbology is drawing, so the two agree. */
-    private void skyAndGround(Canvas c, int w, int h, FlightData.Snapshot s) {
+    /**
+     * Where the video goes, drawn as a plain graded ground rather than a horizon.
+     *
+     * <p>It was a sky and a horizon at first, banked to the telemetry attitude, and that was
+     * a mistake: the symbology draws its own horizon on its own scale, the two did not line
+     * up, and a picture where the instrument disagrees with the view behind it reads as a
+     * bug in the instrument. Nothing here pretends to be a real frame now.
+     */
+    private void videoStandIn(Canvas c, int w, int h) {
         c.drawColor(Color.rgb(10, 11, 15));
-        c.save();
-        c.rotate(-s.roll, w / 2f, h / 2f);
-        c.translate(0f, s.pitch * h / 60f);
         final Paint p = new Paint();
-        p.setShader(new LinearGradient(0f, -h * 0.5f, 0f, h * 0.5f,
-                Color.rgb(74, 108, 156), Color.rgb(150, 178, 214), Shader.TileMode.CLAMP));
-        c.drawRect(-w, -h, 2 * w, h / 2f, p);
-        p.setShader(new LinearGradient(0f, h * 0.5f, 0f, h * 1.5f,
-                Color.rgb(74, 82, 58), Color.rgb(38, 42, 30), Shader.TileMode.CLAMP));
-        c.drawRect(-w, h / 2f, 2 * w, 2 * h, p);
-        c.restore();
+        p.setShader(new LinearGradient(0f, 0f, 0f, h,
+                Color.rgb(46, 52, 64), Color.rgb(24, 27, 34), Shader.TileMode.CLAMP));
+        c.drawRect(0f, 0f, w, h, p);
     }
 
     /** One panel, placed by the layout numbers and mapped through the projection. */

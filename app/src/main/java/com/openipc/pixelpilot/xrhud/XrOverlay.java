@@ -104,6 +104,21 @@ public abstract class XrOverlay {
         grabbed = held;
     }
 
+    /**
+     * Everything that goes onto one frame: clear, the subclass, then the grab outline.
+     *
+     * <p>Factored out of the frame loop so the off-headset preview can render exactly what
+     * the compositor gets. Its first version bypassed this and called {@link #draw} alone,
+     * which quietly left the grab outline out of every picture.
+     */
+    final void renderOnce(Canvas canvas) {
+        canvas.drawColor(0, PorterDuff.Mode.CLEAR);
+        draw(canvas);
+        if (grabbed) {
+            outlineGrab(canvas);
+        }
+    }
+
     /** A frame just inside the edge, in the accent colour, while the panel is held. */
     private void outlineGrab(Canvas canvas) {
         final float inset = Math.max(2f, u * 0.10f);
@@ -122,11 +137,7 @@ public abstract class XrOverlay {
         try {
             canvas = surface.lockHardwareCanvas();
             if (canvas != null) {
-                canvas.drawColor(0, PorterDuff.Mode.CLEAR);
-                draw(canvas);
-                if (grabbed) {
-                    outlineGrab(canvas);
-                }
+                renderOnce(canvas);
             }
         } catch (IllegalArgumentException | IllegalStateException e) {
             // The surface goes away when the session ends; stop rather than spin on it.
