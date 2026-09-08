@@ -66,7 +66,13 @@ public class HudPreviewTest {
     private static final double HOME_LAT = 48.5210;
     private static final double HOME_LON = 9.0560;
 
-    /** Two hertz for two minutes, which is what the position history is sized for. */
+    /**
+     * Two hertz for two minutes, which is what the position history is sized for.
+     *
+     * <p>Fed as fast as the loop runs rather than in real time, so the chart's own time axis
+     * reads a fraction of a minute - it stamps samples with the wall clock. The shape of the
+     * traces is right; the elapsed label is not, and is not meant to be.
+     */
     private static final int STEPS = 240;
 
     private static final float BIAS = 100000f;
@@ -123,8 +129,10 @@ public class HudPreviewTest {
                 Thread.sleep(60);
             }
         }
-        // Let the terrain lookups and the basemap render catch up before drawing.
-        for (int waited = 0; waited < 60 && data.pendingTerrain() > 0; waited++) {
+        // Let the terrain lookups catch up. pendingTerrain() returns -1 for "nothing left",
+        // not 0, so the first version of this loop exited immediately and only worked because
+        // of the sleep below.
+        for (int waited = 0; waited < 100 && data.pendingTerrain() >= 0; waited++) {
             Thread.sleep(100);
         }
         Thread.sleep(1500);  // the basemap render is on its own schedule

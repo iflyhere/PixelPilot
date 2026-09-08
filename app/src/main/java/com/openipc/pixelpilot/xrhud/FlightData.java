@@ -187,7 +187,27 @@ public final class FlightData {
         }
     }
 
-    /** Ground elevation under a past sample, in metres, or NaN where it is not known. */
+    /**
+     * Ground elevation at the arming point, metres above sea level, NaN until it is looked up.
+     *
+     * <p>This is what makes the height model comparable with the telemetry at all. The
+     * altitude in the stream is MAVLink's {@code relative_alt} - metres above where the craft
+     * armed - and a height model gives metres above sea level. Subtracting one from the other
+     * is a datum error, not a height: in the Neckar valley it drew the ground three hundred
+     * metres above the flight path and reported minus three hundred metres above ground.
+     */
+    private volatile float homeElevation = Float.NaN;
+
+    public void setHomeElevation(float metresAsl) {
+        homeElevation = metresAsl;
+    }
+
+    /** NaN while unknown, in which case ground height cannot be shown at all. */
+    public float homeElevation() {
+        return homeElevation;
+    }
+
+    /** Ground elevation under a past sample, in metres above sea level, or NaN if unknown. */
     public void setTerrainAt(int index, float metres) {
         if (index >= 0 && index < HISTORY) {
             histTerrain[index] = metres;

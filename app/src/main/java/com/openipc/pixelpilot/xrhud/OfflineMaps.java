@@ -107,6 +107,19 @@ public final class OfflineMaps {
             return;
         }
         for (int i = 0; i < LOOKUPS_PER_PASS; i++) {
+            // The elevation at the arming point, once, because everything else is measured
+            // against it - see FlightData.setHomeElevation().
+            if (Float.isNaN(data.homeElevation())) {
+                final FlightData.Snapshot s = data.snapshot();
+                if (s.homeKnown) {
+                    final float home = dem.elevationAt(s.homeLat, s.homeLon);
+                    if (!Float.isNaN(home)) {
+                        data.setHomeElevation(home);
+                        Log.i(TAG, "home ground is " + Math.round(home) + " m asl");
+                    }
+                }
+            }
+
             final int index = data.pendingTerrain();
             if (index < 0) {
                 return;

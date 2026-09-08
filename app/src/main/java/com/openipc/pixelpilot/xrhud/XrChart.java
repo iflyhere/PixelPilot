@@ -64,6 +64,17 @@ public final class XrChart extends XrOverlay {
             return;
         }
 
+        // The height model is metres above sea level and the telemetry is metres above the
+        // arming point, so the ground has to be moved into the craft's datum before the two
+        // can share an axis. Without the elevation at home there is no way to do that, and
+        // then the ground is not drawn at all - a band three hundred metres above the flight
+        // path is worse than no band.
+        final float homeAsl = data.homeElevation();
+        final boolean datumKnown = !Float.isNaN(homeAsl);
+        for (int i = 0; i < n; i++) {
+            terrain[i] = (datumKnown && known(terrain[i])) ? terrain[i] - homeAsl : Float.NaN;
+        }
+
         // One vertical scale for both the flight path and the ground, so the gap between them
         // is the height above ground and can be read directly.
         float lo = Float.MAX_VALUE;
