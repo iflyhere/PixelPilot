@@ -1407,7 +1407,16 @@ void XrGoggleSession::resolveListenerMethods(JNIEnv* env, jobject listener)
     mOnOverlayGrab  = env->GetMethodID(cls, "onXrOverlayGrab", "(IZ)V");
     mOnOverlayMoved = env->GetMethodID(cls, "onXrOverlayMoved", "(IFFFFF)V");
     env->DeleteLocalRef(cls);
+    // GetMethodID leaves a pending exception on a miss, which clearing hides - and a listener
+    // method that silently never fires is the kind of thing that gets debugged from the wrong
+    // end for an hour. Say so instead.
     if (env->ExceptionCheck()) env->ExceptionClear();
+    if (mOnButton == nullptr || mOnOverlayGrab == nullptr || mOnOverlayMoved == nullptr)
+    {
+        LOGW("listener is missing a method (button %d, grab %d, moved %d) - those callbacks "
+             "will not fire",
+             mOnButton != nullptr, mOnOverlayGrab != nullptr, mOnOverlayMoved != nullptr);
+    }
 }
 
 void XrGoggleSession::runLoop(JNIEnv* env, jobject listener)
