@@ -121,7 +121,9 @@ public final class XrMinimap extends XrOverlay {
         canvas.drawCircle(cx, cy, r, paint);
 
         north(canvas, cx, cy, r);
-        label(canvas, String.format(Locale.US, "%.0f m", rangeM), cx, cy + r - u * 0.35f,
+        // Above the credit rather than beside it: both used to sit on the bottom edge and
+        // overlapped as soon as a source with a longer name was installed.
+        label(canvas, String.format(Locale.US, "%.0f m", rangeM), cx, cy + r - u * 0.75f,
                 Paint.Align.CENTER);
         credit(canvas);
     }
@@ -135,9 +137,16 @@ public final class XrMinimap extends XrOverlay {
         final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         p.setStyle(Paint.Style.FILL);
         p.setColor(INK_DIM);
-        p.setTextSize(u * 0.26f);
-        p.setTextAlign(Paint.Align.RIGHT);
-        canvas.drawText(c, width - u * 0.15f, height - u * 0.18f, p);
+        p.setTextSize(u * 0.24f);
+        p.setTextAlign(Paint.Align.CENTER);
+        // Dark behind it, for the same reason the track is stroked twice: this now lands on
+        // a photograph as often as on a dark corner.
+        final Paint back = new Paint(p);
+        back.setStyle(Paint.Style.STROKE);
+        back.setStrokeWidth(u * 0.14f);
+        back.setColor(Color.argb(170, 0, 0, 0));
+        canvas.drawText(c, width / 2f, height - u * 0.14f, back);
+        canvas.drawText(c, width / 2f, height - u * 0.14f, p);
     }
 
     private void drawBasemap(Canvas canvas, float cx, float cy, float r,
@@ -192,9 +201,15 @@ public final class XrMinimap extends XrOverlay {
                 path.lineTo(p[0], p[1]);
             }
         }
+        // Twice, dark underneath. Over the grey street map a single stroke was enough;
+        // over an orthophoto it disappeared into the roofs and the treeline, which is where
+        // the track matters most.
         paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(u * 0.26f);
+        paint.setColor(Color.argb(150, 0, 0, 0));
+        canvas.drawPath(path, paint);
         paint.setStrokeWidth(u * 0.16f);
-        paint.setColor(Color.argb(210, 70, 225, 205));
+        paint.setColor(Color.argb(230, 70, 225, 205));
         canvas.drawPath(path, paint);
     }
 
