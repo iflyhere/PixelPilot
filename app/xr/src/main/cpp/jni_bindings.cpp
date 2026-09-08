@@ -85,6 +85,13 @@ JNI_METHOD(void, nativeSetOverlayDragEnabled)
     native(handle)->setOverlayDragEnabled(enabled == JNI_TRUE);
 }
 
+JNI_METHOD(void, nativeSetHandDragEnabled)
+(JNIEnv* env, jclass clazz, jlong handle, jboolean enabled)
+{
+    if (native(handle) == nullptr) return;
+    native(handle)->setHandDragEnabled(enabled == JNI_TRUE);
+}
+
 JNI_METHOD(void, nativeSetOverlayPose)
 (JNIEnv* env, jclass clazz, jlong handle, jint id, jfloat yawDeg, jfloat pitchDeg,
  jfloat tiltDeg, jfloat distance, jfloat widthM)

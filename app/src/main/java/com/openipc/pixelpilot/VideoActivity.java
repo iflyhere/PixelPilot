@@ -861,6 +861,24 @@ public class VideoActivity extends LinkClientActivity
             return false;
         });
 
+        // Not folded into "Hand gestures": that is off because the microgestures fire while
+        // a pilot works the sticks, and a drag needs the ray on a panel before it does
+        // anything. Off by default all the same - it is still the hands.
+        MenuItem handDrag = xrMenu.add("Move instruments with your hands");
+        handDrag.setCheckable(true);
+        handDrag.setChecked(prefs.getBoolean(XrVideoActivity.PREF_HAND_DRAG, false));
+        handDrag.setOnMenuItemClickListener(item -> {
+            boolean enabled = !item.isChecked();
+            item.setChecked(enabled);
+            prefs.edit().putBoolean(XrVideoActivity.PREF_HAND_DRAG, enabled).apply();
+            Toast.makeText(this, enabled
+                    ? "Point a hand at a panel and pinch to move it"
+                    : "Only controllers move instruments", Toast.LENGTH_LONG).show();
+            item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
+            item.setActionView(new View(this));
+            return false;
+        });
+
         MenuItem resetLayout = xrMenu.add("Reset instrument layout");
         resetLayout.setOnMenuItemClickListener(item -> {
             XrVideoActivity.clearSavedLayout(prefs);

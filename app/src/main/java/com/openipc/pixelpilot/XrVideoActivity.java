@@ -116,6 +116,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     static final String PREF_QUAD_DISTANCE = "xr_quad_distance";
     static final String PREF_QUAD_HEIGHT = "xr_quad_height";
     static final String PREF_OVERLAY_DRAG = "xr_overlay_drag";
+    static final String PREF_HAND_DRAG = "xr_hand_drag";
     /** One entry per layer and field, e.g. {@code xr_layout_2_yaw}. See saveOverlayPose(). */
     static final String PREF_LAYOUT_PREFIX = "xr_layout_";
     static final String PREF_LAST_VIDEO_W = "xr_last_video_width";
@@ -220,6 +221,9 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         // On by default, unlike the hand gestures: a trigger pull aimed at one panel is a
         // deliberate act, and it only takes hold when the ray is actually on something.
         xr.setOverlayDragEnabled(prefs.getBoolean(PREF_OVERLAY_DRAG, true));
+        // Its own switch rather than the gesture one: a drag needs the ray on a panel first,
+        // which is nothing like the microgestures that made hand input worth turning off.
+        xr.setHandDragEnabled(prefs.getBoolean(PREF_HAND_DRAG, false));
     }
 
     /**

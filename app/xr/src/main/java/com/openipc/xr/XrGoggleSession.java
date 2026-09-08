@@ -286,6 +286,18 @@ public final class XrGoggleSession {
     }
 
     /**
+     * Whether a tracked hand may drag an instrument, as opposed to a controller. Off by
+     * default.
+     *
+     * <p>Separate from the hand-gesture switch on purpose: a drag needs the pointing ray on a
+     * panel before it does anything, which the microgestures that made hand input worth
+     * switching off do not.
+     */
+    public void setHandDragEnabled(boolean enabled) {
+        if (handle != 0) nativeSetHandDragEnabled(handle, enabled);
+    }
+
+    /**
      * Places an instrument, in the units {@link Listener#onXrOverlayMoved} reports. A
      * distance or width of zero leaves the built-in value alone, so a layout saved before a
      * field existed still restores.
@@ -405,6 +417,8 @@ public final class XrGoggleSession {
     private static native void nativeSetHandInputEnabled(long handle, boolean enabled);
 
     private static native void nativeSetOverlayDragEnabled(long handle, boolean enabled);
+
+    private static native void nativeSetHandDragEnabled(long handle, boolean enabled);
 
     private static native void nativeSetOverlayPose(long handle, int id, float yawDeg,
                                                     float pitchDeg, float tiltDeg,

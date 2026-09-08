@@ -137,6 +137,17 @@ class XrGoggleSession
     bool overlayDragEnabled() const { return mDragEnabled.load(); }
 
     /**
+     * Whether a tracked hand may drag, as opposed to a controller.
+     *
+     * <p>Deliberately not the hand-gesture switch. That one is off because the microgestures
+     * fire while a pilot works the sticks, and a drag has nothing in common with them: it
+     * needs the pointing ray to land on a panel before it does anything at all. Coupling the
+     * two would mean you could not have hand dragging without the gestures that made hand
+     * input worth switching off. Still off by default, because it is the hands.
+     */
+    void setHandDragEnabled(bool enabled) { mHandDragEnabled.store(enabled); }
+
+    /**
      * Places a layer, in the same units as the layout table: degrees, and metres for the
      * last two. A non-finite or non-positive size or distance means "leave that one alone",
      * so a caller restoring a saved layout does not have to know the defaults.
@@ -253,6 +264,7 @@ class XrGoggleSession
     // what makes this cheap: an aim ray converts straight to a yaw and a pitch, so dragging
     // is two subtractions rather than a scene graph.
     std::atomic<bool> mDragEnabled{true};
+    std::atomic<bool> mHandDragEnabled{false};
     // Which layer is being held, or -1. Written and read only by the frame loop.
     int   mDragOverlay  = -1;
     // The angle between the ray and the layer's centre when it was grabbed, so the panel

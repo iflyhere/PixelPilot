@@ -899,11 +899,11 @@ void XrGoggleSession::updateOverlayDrag(JNIEnv* env, jobject listener,
             continue;
         }
 
-        // A hand may only drag when hand input is allowed at all - the same rule the gestures
-        // follow, and for the same reason: a pilot's hands are on a transmitter. Asked here
-        // rather than at the top of the loop so the runtime is only queried while something
-        // is actually being pressed, not on every one of seventy-two frames a second.
-        if (aimIsHand(i) && !mHandInputEnabled.load()) continue;
+        // Hands need their own permission - see setHandDragEnabled() for why this is not
+        // the gesture switch. Asked here rather than at the top of the loop so the runtime is
+        // only queried while something is actually being pressed, not on every one of
+        // seventy-two frames a second.
+        if (aimIsHand(i) && !mHandDragEnabled.load()) continue;
 
         XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
         static constexpr XrSpaceLocationFlags kNeeded =
