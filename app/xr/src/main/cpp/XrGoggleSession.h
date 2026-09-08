@@ -270,6 +270,20 @@ class XrGoggleSession
                            const XrVector3f& origin, XrSpace space, XrTime time,
                            float videoWidthM);
 
+    /**
+     * Listener methods, looked up once per session.
+     *
+     * <p>Not per frame: JNI local references live until the native call that made them
+     * returns, and runLoop() does not return until the session ends - so a GetObjectClass()
+     * in the frame path accumulates one reference every frame for the whole flight. A
+     * jmethodID is not a reference and stays valid while the class is loaded, which it is.
+     */
+    void resolveListenerMethods(JNIEnv* env, jobject listener);
+
+    jmethodID mOnButton       = nullptr;
+    jmethodID mOnOverlayGrab  = nullptr;
+    jmethodID mOnOverlayMoved = nullptr;
+
     /** Which visible layer an aim ray hits first, or -1. */
     int  pickOverlay(const XrVector3f& rayOrigin, const XrVector3f& rayDir,
                      const XrQuaternionf& baseOri, const XrVector3f& origin,

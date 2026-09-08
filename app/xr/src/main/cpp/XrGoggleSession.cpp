@@ -843,11 +843,8 @@ void XrGoggleSession::updateOverlayDrag(JNIEnv* env, jobject listener,
                                         const XrQuaternionf& baseOri, const XrVector3f& origin,
                                         XrSpace space, XrTime time, float videoWidthM)
 {
-    jclass    cls = listener != nullptr ? env->GetObjectClass(listener) : nullptr;
-    jmethodID onGrab =
-        cls != nullptr ? env->GetMethodID(cls, "onXrOverlayGrab", "(IZ)V") : nullptr;
-    jmethodID onMoved =
-        cls != nullptr ? env->GetMethodID(cls, "onXrOverlayMoved", "(IFFFFF)V") : nullptr;
+    jmethodID onGrab  = listener != nullptr ? mOnOverlayGrab : nullptr;
+    jmethodID onMoved = listener != nullptr ? mOnOverlayMoved : nullptr;
 
     const auto letGo = [&]()
     {
@@ -887,28 +884,38 @@ void XrGoggleSession::updateOverlayDrag(JNIEnv* env, jobject listener,
     for (int i = first; i <= last; ++i)
     {
         if (mAimSpace[i] == XR_NULL_HANDLE) continue;
-        // A hand may only drag when hand input is allowed at all - the same rule the
-        // gestures follow, and for the same reason: a pilot's hands are on the sticks.
-        if (aimIsHand(i) && !mHandInputEnabled.load()) continue;
 
         XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
         get.action        = mActionGrab;
         get.subactionPath = mHandPath[i];
         XrActionStateBoolean grabState{XR_TYPE_ACTION_STATE_BOOLEAN};
         if (XR_FAILED(xrGetActionStateBoolean(mSession, &get, &grabState))) continue;
-        if (!grabState.isActive) continue;
-
-        if (!grabState.currentState)
+        if (!grabState.isActive || !grabState.currentState)
         {
+            // Released, or the controller stopped reporting - a dropout has to let go too,
+            // or the panel stays stuck to a pointer that no longer exists and the trigger
+            // never gets its old meaning back.
             if (mDragHand == i) letGo();
             continue;
         }
 
+        // A hand may only drag when hand input is allowed at all - the same rule the gestures
+        // follow, and for the same reason: a pilot's hands are on a transmitter. Asked here
+        // rather than at the top of the loop so the runtime is only queried while something
+        // is actually being pressed, not on every one of seventy-two frames a second.
+        if (aimIsHand(i) && !mHandInputEnabled.load()) continue;
+
         XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
-        if (XR_FAILED(xrLocateSpace(mAimSpace[i], space, time, &loc))) continue;
         static constexpr XrSpaceLocationFlags kNeeded =
             XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
-        if ((loc.locationFlags & kNeeded) != kNeeded) continue;
+        if (XR_FAILED(xrLocateSpace(mAimSpace[i], space, time, &loc)) ||
+            (loc.locationFlags & kNeeded) != kNeeded)
+        {
+            // Tracking lost. Letting go leaves the panel where it was, which beats leaving
+            // it attached to a pose that is no longer being updated.
+            if (mDragHand == i) letGo();
+            continue;
+        }
 
         const XrVector3f rayOrigin = loc.pose.position;
         const XrVector3f rayDir =
@@ -931,6 +938,13 @@ void XrGoggleSession::updateOverlayDrag(JNIEnv* env, jobject listener,
             LOGI("grabbed the %s layer with the %s hand", mOverlays[hit].name,
                  i == 0 ? "left" : "right");
         }
+        else if (mDragHand != i)
+        {
+            // Someone else is holding it. Worth being explicit: the loop bound is decided
+            // before a grab happens, so the frame a drag starts still visits the other hand,
+            // and without this that hand would move the panel using the wrong offset.
+            continue;
+        }
 
         // The ray in the frame the layout is written in, so its angles are the table's.
         float rayYaw   = 0.0f;
@@ -938,7 +952,7 @@ void XrGoggleSession::updateOverlayDrag(JNIEnv* env, jobject listener,
         dirToYawPitch(quatRotate(quatConj(baseOri), rayDir), &rayYaw, &rayPitch);
 
         OverlayLayer& o = mOverlays[mDragOverlay];
-        if (mDragHand == i && grabState.changedSinceLastSync)
+        if (grabState.changedSinceLastSync)
         {
             // Take the offset on the frame the grab starts, so the panel keeps the spot you
             // took hold of instead of snapping its middle onto the pointer.
@@ -952,6 +966,13 @@ void XrGoggleSession::updateOverlayDrag(JNIEnv* env, jobject listener,
     }
 }
 
+/*
+ * Called from whatever thread restores a saved layout, while the frame loop reads the same
+ * fields. Left unsynchronised deliberately: these are aligned 32-bit floats, so a reader sees
+ * one value or the other and never half of each, and the worst case is one frame of the old
+ * arrangement at session start. A lock here would sit in the frame path to protect a write
+ * that happens once.
+ */
 void XrGoggleSession::setOverlayPose(int id, float yawDeg, float pitchDeg, float tiltDeg,
                                      float distance, float widthM)
 {
@@ -1377,8 +1398,21 @@ void XrGoggleSession::requestHaptic(float amplitude, int durationMs)
 // frame loop
 // ---------------------------------------------------------------------------------
 
+void XrGoggleSession::resolveListenerMethods(JNIEnv* env, jobject listener)
+{
+    if (listener == nullptr) return;
+    jclass cls = env->GetObjectClass(listener);
+    if (cls == nullptr) return;
+    mOnButton       = env->GetMethodID(cls, "onXrButton", "(I)V");
+    mOnOverlayGrab  = env->GetMethodID(cls, "onXrOverlayGrab", "(IZ)V");
+    mOnOverlayMoved = env->GetMethodID(cls, "onXrOverlayMoved", "(IFFFFF)V");
+    env->DeleteLocalRef(cls);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
 void XrGoggleSession::runLoop(JNIEnv* env, jobject listener)
 {
+    resolveListenerMethods(env, listener);
     bool exitLoop = false;
     while (!exitLoop && !mStopRequested)
     {
@@ -1651,8 +1685,7 @@ void XrGoggleSession::syncActions(JNIEnv* env, jobject listener)
     sync.activeActionSets      = &active;
     if (XR_FAILED(xrSyncActions(mSession, &sync))) return;
 
-    jclass    cls    = env->GetObjectClass(listener);
-    jmethodID onButton = env->GetMethodID(cls, "onXrButton", "(I)V");
+    jmethodID onButton = mOnButton;
 
     struct
     {
