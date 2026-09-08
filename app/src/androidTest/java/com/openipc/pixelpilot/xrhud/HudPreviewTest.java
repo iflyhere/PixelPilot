@@ -150,6 +150,11 @@ public class HudPreviewTest {
         final Bitmap grabbed = render(minimap, MAP_W, MAP_H, "minimap-grabbed");
         cockpit(data, symBmp, dashBmp, grabbed, chartBmp, true, "cockpit-grabbing-the-map");
 
+        // What the minimap's backdrop actually looks like at the ranges it draws. Rendered
+        // straight from the file rather than through a simulated flight, because the question
+        // "is this map sharp enough" is about the map and not about the telemetry.
+        spanLadder(context);
+
         maps.stop();
         camera.stop();
         symbology.stop();
@@ -208,6 +213,35 @@ public class HudPreviewTest {
                 42f + 30f * (float) Math.sin(Math.PI * progress),   // throttle
                 (byte) 1, (byte) 0, (byte) 3, (byte) 1, (byte) -62, (byte) 0,
                 "PixelPilot HUD preview");
+    }
+
+    /**
+     * The basemap at the spans the minimap uses, so its resolution can be judged directly.
+     *
+     * <p>The minimap draws max(240 m, 2.6x the distance from home) across 512 pixels. A file
+     * built only to 25 m a pixel is an unreadable smear at the short end and perfectly legible
+     * at the long one, which is impossible to argue about once it is two pictures.
+     */
+    private void spanLadder(Context context) throws Exception {
+        final java.io.File file = MapFiles.file(context, MapFiles.Kind.BASEMAP);
+        if (!file.isFile()) {
+            Log.i(TAG, "no basemap installed, skipping the span ladder");
+            return;
+        }
+        try (BasemapRenderer renderer = BasemapRenderer.open(file)) {
+            if (renderer == null) {
+                return;
+            }
+            Log.i(TAG, "basemap credit: " + renderer.attribution());
+            for (float span : new float[]{240f, 600f, 1500f, 5000f}) {
+                final Bitmap bmp = renderer.render(HOME_LAT, HOME_LON, span, 512);
+                if (bmp == null) {
+                    Log.w(TAG, "no basemap render at " + span + " m");
+                    continue;
+                }
+                write(bmp, String.format(Locale.US, "basemap-%04.0fm.png", span));
+            }
+        }
     }
 
     /** Height above the arming point, easing off as it levels out. */

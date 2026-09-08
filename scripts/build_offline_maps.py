@@ -10,6 +10,13 @@ files from sources that may actually be redistributed:
             usual OpenStreetMap tile servers are not: their tile usage policy rules out bulk
             downloading, so they are not an option here however convenient they look.
 
+  imagery   Baden-Wuerttemberg orthophotos at 20 cm a pixel, from the LGL's WMS, also
+            dl-de/by-2-0 and marked "Unentgeltliche Nutzung nach Open Data Lizenz". For flying
+            this beats a street map: you recognise the actual treeline and the actual field
+            edge you are looking at, which is not something a road casing tells you. Requires
+            Pillow, because a WMS serves images by bounding box rather than tiles - see
+            fetch_block().
+
   terrain   The Terrain Tiles open dataset on AWS, terrarium encoding. Global, no account.
 
 Both licences require naming the source. The attribution string goes into the MBTiles metadata
@@ -18,23 +25,36 @@ and the HUD renders it on the minimap, so a built file carries its own credit.
 Usage, for the whole of Baden-Wuerttemberg plus detail around a flying site:
 
     python scripts/build_offline_maps.py basemap --bbox 7.4,47.4,10.6,49.9 --zooms 11-12
-    python scripts/build_offline_maps.py basemap --center 48.78,9.18 --radius 25 --zooms 13-15
     python scripts/build_offline_maps.py terrain --bbox 7.4,47.4,10.6,49.9 --zooms 11
+    python scripts/build_offline_maps.py imagery --center 48.52,9.06 --radius 3 --zooms 16-18
 
-Zoom is what decides size, and it decides it steeply - each level is four times the tiles:
+The last one is the one that makes a minimap sharp. The minimap draws max(240 m, 2.6x the
+distance from home) across 512 pixels, so close in it wants about half a metre per pixel - which
+is zoom 17 or 18 - and it only wants that within a few kilometres of where you took off. A tight
+high-zoom box plus a wide coarse one is far cheaper than either alone:
 
-    z11   51 m/px      z13   13 m/px      z15   3.2 m/px
-    z12   25 m/px      z14  6.3 m/px
+    imagery --center <site> --radius 3  --zooms 16-18     ~4500 tiles, ~90 MB, sharp
+    imagery --center <site> --radius 25 --zooms 13-15     ~5000 tiles, ~100 MB, context
 
-The minimap picks the closest zoom the file has for the span it is drawing, which is
-max(240 m, 2.6x the distance from home) across 512 px. So a statewide z11-z12 file is right for
-orientation and long flights, and z14-z15 within a radius of where you actually fly is what
-makes it sharp close in. The height profile is not fussy - z11 covers a state in 26 MB and
-terrain does not change between zoom levels the way a map's detail does.
+Metres per pixel by zoom, at this latitude - each level is four times the tiles:
+
+    z11  51      z13  13      z15  3.2     z17  0.8
+    z12  25      z14  6.3     z16  1.6     z18  0.4
+
+The minimap picks the closest zoom its file has for the span it is drawing, so a single file
+holding a wide coarse layer and a narrow sharp one covers every range. Build it in two passes
+with --append:
+
+    imagery --center 48.52,9.06 --radius 25 --zooms 13-15 -o imagery.mbtiles
+    imagery --center 48.52,9.06 --radius 3  --zooms 16-18 -o imagery.mbtiles --append
+
+The height profile is not fussy about zoom - measured, z11 and z12 give the same error, because
+the source resolution is the limit and not the tile grid. One low zoom over a whole state is the
+right answer there.
 
 Copy the results to the headset with:
 
-    adb push terrain-bw.mbtiles basemap-bw.mbtiles /sdcard/Download/
+    adb push imagery.mbtiles terrain-bw.mbtiles /sdcard/Download/
 
 and pick them up in the app under the offline map settings.
 """
@@ -60,6 +80,20 @@ SOURCES = {
         "style": "grau",
         "attribution": "basemap.de / BKG (dl-de/by-2-0)",
     },
+    "imagery": {
+        # A WMS, not a tile server: images come back for a bounding box, so whole blocks of
+        # tiles are fetched at once and cut up locally. That is also what keeps this polite -
+        # a block of 8x8 is one request where tiles would be sixty-four.
+        "wms": "https://owsproxy.lgl-bw.de/owsproxy/ows/WMS_LGL-BW_ATKIS_DOP_20_C",
+        "wms_layer": "IMAGES_DOP_20_RGB",
+        "url": None,
+        # JPEG, because these are photographs: the same tile is about a tenth the size of a
+        # PNG and no worse to look at on a 512 px minimap.
+        "format": "jpg",
+        "encoding": None,
+        "style": None,
+        "attribution": "Orthophotos: LGL Baden-Wuerttemberg (dl-de/by-2-0)",
+    },
     "terrain": {
         "url": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
         "format": "png",
@@ -74,9 +108,19 @@ SOURCES = {
 
 USER_AGENT = "PixelPilot-offline-map-builder/1.0"
 
-# Four at a time with a short pause. These are public services doing us a favour; the job is
-# minutes either way, and there is no reason to make it look like an attack.
+# Web Mercator half-circumference, for turning tile indices into a WMS bounding box.
+MERCATOR_R = 20037508.342789244
+
+# Tiles per side in one WMS request. Eight is 2048x2048 pixels, well inside the service's
+# 15000 px limit, and it turns a statewide job from tens of thousands of requests into
+# hundreds.
+BLOCK = 8
+
+# A few at a time with a short pause. These are public services doing us a favour; the job is
+# minutes either way, and there is no reason to make it look like an attack. The WMS gets fewer
+# threads still - it renders each request rather than serving a file off a disk.
 THREADS = 4
+WMS_THREADS = 2
 PAUSE_S = 0.02
 
 
@@ -119,7 +163,27 @@ def tile_list(bbox, zooms):
     return out
 
 
-def make_db(path, source, bbox, zooms, name):
+def open_db(path, source, bbox, zooms, name, append):
+    """
+    Creates the MBTiles, or reopens one to add zoom levels to it.
+
+    <p>Appending exists because a useful map is two passes: a wide coarse layer for getting
+    your bearings and a narrow sharp one for where you actually fly. The minimap picks whatever
+    zoom is closest to the span it needs, so both belong in one file.
+    """
+    if append and os.path.exists(path):
+        db = sqlite3.connect(path)
+        # Widen the recorded zoom range rather than replacing it, or the reader will refuse
+        # the levels that were already there.
+        have = dict(db.execute("SELECT name, value FROM metadata").fetchall())
+        lo = min(int(have.get("minzoom", 99)), min(zooms))
+        hi = max(int(have.get("maxzoom", -1)), max(zooms))
+        db.execute("UPDATE metadata SET value=? WHERE name='minzoom'", (str(lo),))
+        db.execute("UPDATE metadata SET value=? WHERE name='maxzoom'", (str(hi),))
+        db.commit()
+        print("appending to %s, which already has zooms %s..%s"
+              % (path, have.get("minzoom"), have.get("maxzoom")))
+        return db
     if os.path.exists(path):
         os.remove(path)
     db = sqlite3.connect(path)
@@ -142,6 +206,52 @@ def make_db(path, source, bbox, zooms, name):
     db.executemany("INSERT INTO metadata VALUES (?, ?)", rows)
     db.commit()
     return db
+
+
+def tile_bounds_3857(z, x, y, span=1):
+    """The Web Mercator bounding box of a span x span block of tiles at (x, y)."""
+    size = 2.0 * MERCATOR_R / (1 << z)
+    west = -MERCATOR_R + x * size
+    north = MERCATOR_R - y * size
+    return west, north - size * span, west + size * span, north
+
+
+def fetch_block(source, z, x, y, span):
+    """
+    One WMS request covering span x span tiles, cut into individual tiles.
+
+    <p>Returns a dict of (x, y) -> encoded bytes. Tiles the service has no imagery for come
+    back pure white; those are dropped rather than stored, which is what keeps a box that
+    overlaps the state border from being mostly blank filler.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        raise SystemExit("the imagery source needs Pillow: python -m pip install pillow")
+    import io
+
+    minx, miny, maxx, maxy = tile_bounds_3857(z, x, y, span)
+    px = 256 * span
+    url = (
+        "%s?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=%s&STYLES="
+        "&SRS=EPSG:3857&BBOX=%.4f,%.4f,%.4f,%.4f&WIDTH=%d&HEIGHT=%d&FORMAT=image/jpeg"
+        % (source["wms"], source["wms_layer"], minx, miny, maxx, maxy, px, px)
+    )
+    blob = fetch(url)
+    if blob is None:
+        return {}
+    block = Image.open(io.BytesIO(blob)).convert("RGB")
+    out = {}
+    for dy in range(span):
+        for dx in range(span):
+            tile = block.crop((dx * 256, dy * 256, dx * 256 + 256, dy * 256 + 256))
+            lo, hi = tile.convert("L").getextrema()
+            if lo == 255 and hi == 255:
+                continue  # nodata, outside the state
+            buf = io.BytesIO()
+            tile.save(buf, "JPEG", quality=82, optimize=True)
+            out[(x + dx, y + dy)] = buf.getvalue()
+    return out
 
 
 def fetch(url):
@@ -173,6 +283,8 @@ def main(argv=None):
     ap.add_argument("--style", help="basemap only: grau (default) or farbe")
     ap.add_argument("-o", "--out", help="output .mbtiles")
     ap.add_argument("--name", help="metadata name")
+    ap.add_argument("--append", action="store_true",
+                    help="add these zooms to an existing file instead of replacing it")
     ap.add_argument("--yes", action="store_true", help="skip the size confirmation")
     args = ap.parse_args(argv)
 
@@ -188,21 +300,32 @@ def main(argv=None):
     out = args.out or ("%s.mbtiles" % args.source)
     name = args.name or "PixelPilot %s" % args.source
 
-    # Guessed from measurement: these sources run 50-70 KB a tile. Worth showing, because a
-    # zoom level chosen without thinking is the difference between 26 MB and 5 GB.
+    # Measured: the raster sources run 50-70 KB a tile, orthophoto JPEGs about 20. Worth
+    # showing, because a zoom level chosen without thinking is the difference between 26 MB
+    # and 5 GB - each level is four times the tiles.
+    per_tile_kb = 20 if source.get("wms") else 60
     print("%s: %d tiles over zooms %s, roughly %.0f MB"
-          % (args.source, len(tiles), args.zooms, len(tiles) * 60 / 1024.0))
+          % (args.source, len(tiles), args.zooms, len(tiles) * per_tile_kb / 1024.0))
     print("bbox %.4f,%.4f,%.4f,%.4f -> %s" % (bbox[0], bbox[1], bbox[2], bbox[3], out))
     if not args.yes and len(tiles) > 20000:
         print("That is a lot of requests to a free public service. Pass --yes if you mean it.")
         return 1
 
-    db = make_db(out, source, bbox, zooms, name)
+    db = open_db(out, source, bbox, zooms, name, args.append)
     work = queue.Queue()
-    for t in tiles:
-        work.put(t)
+    wms = source.get("wms") is not None
+    if wms:
+        # Whole blocks, deduplicated: several wanted tiles usually fall in the same block.
+        blocks = sorted({(z, x - x % BLOCK, y - y % BLOCK) for z, x, y in tiles})
+        for b in blocks:
+            work.put(b)
+        print("  %d tiles fall into %d WMS requests" % (len(tiles), len(blocks)))
+    else:
+        for t in tiles:
+            work.put(t)
     results = queue.Queue()
     failures = []
+    wanted = set((z, x, y) for z, x, y in tiles)
 
     def worker():
         while True:
@@ -210,36 +333,67 @@ def main(argv=None):
                 z, x, y = work.get_nowait()
             except queue.Empty:
                 return
-            url = source["url"].format(z=z, x=x, y=y, style=source["style"])
-            try:
-                blob = fetch(url)
-            except Exception as e:
-                failures.append((z, x, y, str(e)))
-                blob = None
-            results.put((z, x, y, blob))
+            if wms:
+                try:
+                    got = fetch_block(source, z, x, y, BLOCK)
+                except SystemExit:
+                    raise
+                except Exception as e:
+                    failures.append((z, x, y, str(e)))
+                    got = {}
+                # Only the tiles actually asked for; a block overhangs the wanted area.
+                for (tx, ty), blob in got.items():
+                    if (z, tx, ty) in wanted:
+                        results.put((z, tx, ty, blob))
+                results.put(("block-done", z, x, y))
+            else:
+                url = source["url"].format(z=z, x=x, y=y, style=source["style"])
+                try:
+                    blob = fetch(url)
+                except Exception as e:
+                    failures.append((z, x, y, str(e)))
+                    blob = None
+                results.put((z, x, y, blob))
             time.sleep(PAUSE_S)
 
-    threads = [threading.Thread(target=worker, daemon=True) for _ in range(THREADS)]
+    threads = [threading.Thread(target=worker, daemon=True)
+               for _ in range(WMS_THREADS if wms else THREADS)]
     for t in threads:
         t.start()
 
     done = 0
     stored = 0
     started = time.time()
-    while done < len(tiles):
-        z, x, y, blob = results.get()
-        done += 1
+    # For a WMS the unit of progress is a request, not a tile - a block yields many tiles at
+    # once and some of them are nodata that is never stored.
+    total = len({(z, x - x % BLOCK, y - y % BLOCK) for z, x, y in tiles}) if wms else len(tiles)
+    while done < total:
+        first, z, x, y = (None, None, None, None)
+        item = results.get()
+        if item[0] == "block-done":
+            _, z, x, y = item
+            done += 1
+            if done % 10 == 0 or done == total:
+                db.commit()
+                rate = done / max(0.001, time.time() - started)
+                print("  %d/%d requests  %.1f/s  eta %.0f s  %d stored  %d failed"
+                      % (done, total, rate, (total - done) / max(rate, 0.001), stored,
+                         len(failures)), flush=True)
+            continue
+        z, x, y, blob = item
+        if not wms:
+            done += 1
         if blob:
             # MBTiles counts tile_row from the bottom (TMS) and the formulas above from the
             # top, which is the single easiest thing to get wrong here.
             db.execute("INSERT OR REPLACE INTO tiles VALUES (?, ?, ?, ?)",
                        (z, x, (1 << z) - 1 - y, sqlite3.Binary(blob)))
             stored += 1
-        if done % 200 == 0 or done == len(tiles):
+        if not wms and (done % 200 == 0 or done == total):
             db.commit()
             rate = done / max(0.001, time.time() - started)
             print("  %d/%d  %.0f tiles/s  eta %.0f s  %d failed"
-                  % (done, len(tiles), rate, (len(tiles) - done) / max(rate, 0.001),
+                  % (done, total, rate, (total - done) / max(rate, 0.001),
                      len(failures)), flush=True)
 
     db.commit()
