@@ -643,7 +643,12 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         hint.setColor(Color.rgb(130, 140, 155));
         canvas.drawText("A recenter    B passthrough    stick click record", cx, y, hint);
         y += h / 26f;
-        canvas.drawText("menu button or thumb swipe left: back to flat mode", cx, y, hint);
+        canvas.drawText("trigger on a panel moves it, thumbstick sizes it", cx, y, hint);
+        y += h / 26f;
+        // The left menu button is the only way out from in here, so it says so. The thumb
+        // swipe this used to offer is gone - it was removed along with the other exit
+        // gesture, and naming a control that no longer exists is worse than naming none.
+        canvas.drawText("left controller menu button: back to flat mode", cx, y, hint);
     }
 
     // ------------------------------------------------------------------------------

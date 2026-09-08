@@ -891,7 +891,7 @@ public class VideoActivity extends LinkClientActivity
         addMapImport(maps, "Basemap", MapFiles.Kind.BASEMAP, PICK_BASEMAP_REQUEST_CODE);
         addMapImport(maps, "Terrain (height)", MapFiles.Kind.TERRAIN, PICK_TERRAIN_REQUEST_CODE);
 
-        MenuItem help = xrMenu.add("A/X recenter, B/Y passthrough, stick click record, trigger grabs a panel");
+        MenuItem help = xrMenu.add("A/X recenter, B/Y passthrough, stick click record, trigger grabs a panel, left menu button leaves VR");
         help.setEnabled(false);
         MenuItem help2 = xrMenu.add("Stick height/size, trigger nearer, grip farther, menu exits");
         help2.setEnabled(false);
