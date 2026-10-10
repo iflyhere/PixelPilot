@@ -41,24 +41,23 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # A fresh runner generates a new debug keystore every run, so every APK gets a
-      # different signature and each test install needs an uninstall first - which wipes the
-      # app's settings, channel included, and that looks exactly like a bug. Caching
-      # ~/.android/debug.keystore did not work (the runner puts it elsewhere), so the key is
-      # created explicitly in the workspace and that file is what gets cached.
-      - name: Cache signing key
-        uses: actions/cache@v4
-        with:
-          path: ci-debug.keystore
-          key: android-ci-debug-keystore-v2
-
-      - name: Ensure signing key
+      # The key comes from a repository secret, not from the cache it used to live in. A cache
+      # entry expires after seven days without use, and when this one did the next run quietly
+      # generated a new key. A month away was enough: every build after that was signed
+      # differently from the one on the headset and could only be installed over an uninstall,
+      # which wipes the app's data - offline maps, settings and the ground station key included.
+      # A secret does not expire. The certificate fingerprint is printed so a mismatch can be
+      # spotted from the log; that is the public half, not the key.
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.CI_DEBUG_KEYSTORE_B64 }}
         run: |
-          if [ ! -f ci-debug.keystore ]; then
-            echo "generating a new CI signing key"
-            keytool -genkeypair -v -keystore ci-debug.keystore               -storepass android -keypass android -alias pixelpilotci               -keyalg RSA -keysize 2048 -validity 10000               -dname "CN=PixelPilot Test Build, OU=CI, O=PixelPilot, C=DE"
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::CI_DEBUG_KEYSTORE_B64 is not set. Refusing to sign with a throwaway key."
+            exit 1
           fi
-          keytool -list -keystore ci-debug.keystore -storepass android | tail -2
+          echo "$KEYSTORE_B64" | base64 -d > ci-debug.keystore
+          keytool -list -keystore ci-debug.keystore -storepass android | grep -iE "SHA-?256"
 
       - name: Assemble debug
         run: |
