@@ -6,6 +6,7 @@
 #define PIXELPILOT_AUDIODECODER_H
 #include <aaudio/AAudio.h>
 #include <condition_variable>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -14,18 +15,31 @@
 
 typedef struct _AudioUDPPacket
 {
-    _AudioUDPPacket(const uint8_t* _data, size_t _len)
+    // Room for any RTP packet the link delivers. It was 250 bytes with nothing checking the
+    // length, so a perfectly ordinary packet - PCM at 8 kHz is already 320 bytes per 20 ms -
+    // was written past the end of the array. enqueueAudio() drops anything larger.
+    static constexpr size_t kMaxLen = 1500;
+
+    _AudioUDPPacket(const uint8_t* _data, size_t _len) : len(_len <= kMaxLen ? _len : 0)
     {
-        memcpy(data, _data, _len);
-        len = _len;
+        if (len > 0)
+        {
+            memcpy(data, _data, len);
+        }
     };
-    uint8_t data[250];
+    uint8_t data[kMaxLen];
     size_t  len;
 } AudioUDPPacket;
 
 class AudioDecoder
 {
   public:
+    static constexpr int kSampleRate = 48000;
+    static constexpr int kChannels   = 1;
+    // The longest an Opus packet can be is 120 ms, which at 48 kHz is 5760 samples per
+    // channel - so a buffer this size holds any packet opus_decode() will accept.
+    static constexpr int kMaxFrameSamples = 5760;
+
     AudioDecoder();
     ~AudioDecoder();
 
@@ -52,10 +66,22 @@ class AudioDecoder
     }
     void processAudioQueue();
     void stopAudio();
+
+    /**
+     * Replaces the output stream with a new one.
+     *
+     * <p>Horizon OS mutes a player that is running when the headset wakes with the app not
+     * visible, and the mute stays with that stream after the app comes back to the front. A new
+     * stream starts unmuted, so the app calls this whenever it returns to the foreground.
+     */
+    void reopenOutput();
     bool isInit = false;
 
   private:
     void onNewAudioData(const uint8_t* data, const std::size_t data_length);
+    // Both expect m_mtxStream to be held.
+    bool openOutputLocked();
+    void closeOutputLocked();
 
   private:
     const int                  BUFFER_CAPACITY_IN_FRAMES = 4096;
@@ -64,8 +90,12 @@ class AudioDecoder
     std::condition_variable    m_cvQueue;
     bool                       stopAudioFlag = false;
     std::thread                m_audioThread;
-    AAudioStreamBuilder*       m_builder    = nullptr;
+    // Guards m_stream: the decode thread writes to it while reopenOutput() and stopAudio()
+    // replace or close it from another thread.
+    std::mutex                 m_mtxStream;
     AAudioStream*              m_stream     = nullptr;
     OpusDecoder*               pOpusDecoder = nullptr;
+    // Only ever touched by the decode thread.
+    opus_int16                 m_pcm[kMaxFrameSamples * kChannels];
 };
 #endif  // PIXELPILOT_AUDIODECODER_H

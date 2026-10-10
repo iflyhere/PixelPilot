@@ -61,6 +61,8 @@ public class VideoPlayer implements IVideoParamsChanged {
     public static native void nativeStartAudio(long nativeInstance);
     public static native void nativeStopAudio(long nativeInstance);
 
+    public static native void nativeReopenAudioOutput(long nativeInstance);
+
     //get members or other information. Some might be only usable in between (nativeStart <-> nativeStop)
     public static native String getVideoInfoString(long nativeInstance);
 
@@ -116,6 +118,16 @@ public class VideoPlayer implements IVideoParamsChanged {
     public void startAudio()
     {
         nativeStartAudio(nativeVideoPlayer);
+    }
+
+    /**
+     * Replaces the audio output stream with a fresh one. On a Meta Quest the system mutes a
+     * stream that is playing when the headset wakes with the app out of sight, and the mute
+     * stays with that stream after the app comes back - a new one starts unmuted.
+     */
+    public void reopenAudioOutput()
+    {
+        nativeReopenAudioOutput(nativeVideoPlayer);
     }
 
     public void stopAudio()

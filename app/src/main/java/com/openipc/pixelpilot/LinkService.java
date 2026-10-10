@@ -321,6 +321,21 @@ public class LinkService extends Service
     }
 
     /** Points the decoder at a new output surface. The link keeps running throughout. */
+    /**
+     * Gives the audio a new output stream. Called whenever an activity comes back to the front.
+     *
+     * <p>Found on a Quest 3: the player is muted by the system ({@code dumpsys audio} shows
+     * {@code mutedState:appOps}) at the moment the headset wakes with the app not visible, and
+     * it stays muted after the app returns, because the mute belongs to that stream. The app
+     * holds the permission the whole time. A stream opened while the app is in front comes up
+     * unmuted, so this costs a few milliseconds of audio and fixes it.
+     */
+    public void refreshAudioOutput() {
+        if (videoPlayer != null) {
+            videoPlayer.reopenAudioOutput();
+        }
+    }
+
     public void attachSurface(Surface surface, int index) {
         if (videoPlayer != null) {
             videoPlayer.attachSurface(surface, index);

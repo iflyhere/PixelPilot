@@ -81,6 +81,17 @@ public abstract class LinkClientActivity extends AppCompatActivity implements Li
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        // Here rather than in each mode, so the flat and the immersive activity both get it.
+        // On the very first resume the service is not bound yet, which is fine: its stream was
+        // created moments ago with the app already in front.
+        if (link != null) {
+            link.refreshAudioOutput();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         if (link != null) {
             link.removeClient(this);
