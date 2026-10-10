@@ -70,9 +70,11 @@ class AudioDecoder
     /**
      * Replaces the output stream with a new one.
      *
-     * <p>Horizon OS mutes a player that is running when the headset wakes with the app not
-     * visible, and the mute stays with that stream after the app comes back to the front. A new
-     * stream starts unmuted, so the app calls this whenever it returns to the foreground.
+     * <p>On a Meta Quest, a stream opened while the headset is asleep is muted by the system at
+     * the moment it wakes, and the mute stays with that stream for good - bringing the app to
+     * the front does not lift it. That is easy to hit: plugging the wifi adapter in with the
+     * headset off launches the app through its USB filter. A stream opened while awake is not
+     * affected, so the app calls this whenever it returns to the foreground.
      */
     void reopenOutput();
     bool isInit = false;

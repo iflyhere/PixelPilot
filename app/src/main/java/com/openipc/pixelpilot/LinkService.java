@@ -324,10 +324,11 @@ public class LinkService extends Service
     /**
      * Gives the audio a new output stream. Called whenever an activity comes back to the front.
      *
-     * <p>Found on a Quest 3: the player is muted by the system ({@code dumpsys audio} shows
-     * {@code mutedState:appOps}) at the moment the headset wakes with the app not visible, and
-     * it stays muted after the app returns, because the mute belongs to that stream. The app
-     * holds the permission the whole time. A stream opened while the app is in front comes up
+     * <p>Found on a Quest 3 and reproduced from the dumpsys audio history: a stream opened while
+     * the headset is asleep is muted by the system ({@code mutedState:appOps}) the moment it
+     * wakes, and stays muted after the app returns, because the mute belongs to that stream. The
+     * app holds the permission the whole time. Plugging the adapter in with the headset off is
+     * enough to cause it, since that launches the app. A stream opened while awake comes up
      * unmuted, so this costs a few milliseconds of audio and fixes it.
      */
     public void refreshAudioOutput() {

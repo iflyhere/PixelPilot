@@ -121,9 +121,9 @@ public class VideoPlayer implements IVideoParamsChanged {
     }
 
     /**
-     * Replaces the audio output stream with a fresh one. On a Meta Quest the system mutes a
-     * stream that is playing when the headset wakes with the app out of sight, and the mute
-     * stays with that stream after the app comes back - a new one starts unmuted.
+     * Replaces the audio output stream with a fresh one. On a Meta Quest a stream opened while
+     * the headset is asleep is muted when it wakes, and the mute stays with that stream after the
+     * app comes back - a new one, opened while awake, starts unmuted.
      */
     public void reopenAudioOutput()
     {

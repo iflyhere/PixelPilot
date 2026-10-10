@@ -84,8 +84,9 @@ public abstract class LinkClientActivity extends AppCompatActivity implements Li
     protected void onResume() {
         super.onResume();
         // Here rather than in each mode, so the flat and the immersive activity both get it.
-        // On the very first resume the service is not bound yet, which is fine: its stream was
-        // created moments ago with the app already in front.
+        // On a normal launch the first resume comes before the service is bound, which is fine
+        // - its stream was opened while awake. When the app was launched with the headset
+        // asleep, the bind has long completed by the time a wake brings it to the front.
         if (link != null) {
             link.refreshAudioOutput();
         }
