@@ -122,6 +122,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     static final String PREF_OVERLAY_DRAG = "xr_overlay_drag";
     static final String PREF_HAND_DRAG = "xr_hand_drag";
     static final String PREF_FLIGHT_LOG = "xr_flight_log";
+    /** Buzz the controllers when the link loses packets. On by default, as it always was. */
+    static final String PREF_LINK_HAPTICS = "xr_link_haptics";
     /**
      * Which OSD is over the video: {@link #OSD_CAMERA} (burned in by the camera's msposd),
      * {@link #OSD_HEADSET} (this app's symbology) or {@link #OSD_BOTH}, the default and what it
@@ -187,6 +189,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     // Link quality haptics
     private long lastHapticAt;
     private boolean linkWasBad;
+    /** Read once at start, like the other VR settings. */
+    private boolean linkHaptics = true;
     private volatile WfbNGStats lastStats;
     private long lastStatsLogAt;
 
@@ -246,6 +250,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         // Its own switch rather than the gesture one: a drag needs the ray on a panel first,
         // which is nothing like the microgestures that made hand input worth turning off.
         xr.setHandDragEnabled(prefs.getBoolean(PREF_HAND_DRAG, false));
+        linkHaptics = prefs.getBoolean(PREF_LINK_HAPTICS, true);
 
         // The camera burns its OSD in for "camera" and "both", and the headset draws its own
         // for "headset" and "both". A camera without scripts/camera ignores what it is told,
@@ -853,7 +858,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         final boolean bad = lost > 0 || recovered > data.count_p_all / 8;
 
         final long now = System.currentTimeMillis();
-        if (bad && (!linkWasBad || now - lastHapticAt > 2000)) {
+        if (linkHaptics && bad && (!linkWasBad || now - lastHapticAt > 2000)) {
             lastHapticAt = now;
             xr.haptic(lost > 0 ? 1.0f : 0.5f, lost > 0 ? 180 : 70);
         }

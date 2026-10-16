@@ -903,6 +903,24 @@ public class VideoActivity extends LinkClientActivity
             return false;
         });
 
+        // On by default: in flight a buzz is a warning that does not depend on reading an OSD
+        // number. Switchable because on a bench, with the drone next to the headset, the link
+        // loses packets all the time and the controllers never stop.
+        MenuItem linkHaptics = xrMenu.add("Vibrate on link loss");
+        linkHaptics.setCheckable(true);
+        linkHaptics.setChecked(prefs.getBoolean(XrVideoActivity.PREF_LINK_HAPTICS, true));
+        linkHaptics.setOnMenuItemClickListener(item -> {
+            boolean enabled = !item.isChecked();
+            item.setChecked(enabled);
+            prefs.edit().putBoolean(XrVideoActivity.PREF_LINK_HAPTICS, enabled).apply();
+            Toast.makeText(this, enabled
+                    ? "Controllers buzz when the link loses packets - from the next VR start"
+                    : "No buzz on link loss - from the next VR start", Toast.LENGTH_LONG).show();
+            item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
+            item.setActionView(new View(this));
+            return false;
+        });
+
         // On by default: a log switched on after the fact is never there for the flight you
         // wanted it for. It writes into the app's own external directory, so it can be
         // fetched with a plain adb pull and needs no folder picked.
