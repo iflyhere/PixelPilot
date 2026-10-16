@@ -5,6 +5,7 @@
 #ifndef FPVUE_VIDEODECODER_H
 #define FPVUE_VIDEODECODER_H
 
+#include <chrono>
 #include <android/log.h>
 #include <android/native_window.h>
 #include <jni.h>
@@ -138,6 +139,8 @@ class VideoDecoder
     static constexpr int64_t    BUFFER_TIMEOUT_US = 17 * 1000;  // 17ms (a little bit more than 17 ms (==60 fps))
   private:
     KeyFrameFinder mKeyFrameFinder;
+    // When configure was last tried, so a failing one is retried at most once a second.
+    std::chrono::steady_clock::time_point mLastConfigureAttempt{};
     bool           IS_H265 = false;
 };
 

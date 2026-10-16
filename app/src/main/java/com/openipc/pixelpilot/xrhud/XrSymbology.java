@@ -21,6 +21,22 @@ public final class XrSymbology extends XrOverlay {
 
     private final FlightData data;
 
+    /**
+     * Drawn under everything while there is no video - the "no video" screen. It used to be
+     * painted straight into the video's own surface, and a surface has one producer: once the
+     * status screen held it, the decoder could not connect and never started. Here it costs
+     * the decoder nothing.
+     */
+    @androidx.annotation.Nullable
+    private volatile android.graphics.Bitmap backdrop;
+    private final Paint backdropPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
+    private final android.graphics.RectF backdropRect = new android.graphics.RectF();
+
+    /** Null takes it away. The bitmap must not be drawn into after it is handed over. */
+    public void setBackdrop(@androidx.annotation.Nullable android.graphics.Bitmap bitmap) {
+        backdrop = bitmap;
+    }
+
     public XrSymbology(Surface surface, int width, int height, FlightData data) {
         // 40ms: the air side sends attitude at about 20Hz, so more would redraw the same angle.
         super("XrSymbology", surface, width, height, 20, 40);
@@ -32,6 +48,12 @@ public final class XrSymbology extends XrOverlay {
         final float cx = width / 2f;
         final float cy = height / 2f;
         final FlightData.Snapshot s = data.snapshot();
+
+        final android.graphics.Bitmap b = backdrop;
+        if (b != null) {
+            backdropRect.set(0f, 0f, width, height);
+            canvas.drawBitmap(b, null, backdropRect, backdropPaint);
+        }
 
         if (s.fresh) {
             ladder(canvas, cx, cy, s);

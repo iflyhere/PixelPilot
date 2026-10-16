@@ -117,8 +117,12 @@ void VideoDecoder::interpretNALU(const NALU& nalu)
         // Store sps,pps, vps(H265 only)
         // As soon as enough data has been buffered to initialize the decoder,do so.
         mKeyFrameFinder.saveIfKeyFrame(nalu);
-        if (mKeyFrameFinder.allKeyFramesAvailable(IS_H265))
+        // At most once a second: a configure that keeps failing would otherwise be retried on
+        // every NALU that arrives.
+        const auto now = std::chrono::steady_clock::now();
+        if (mKeyFrameFinder.allKeyFramesAvailable(IS_H265) && now - mLastConfigureAttempt > std::chrono::seconds(1))
         {
+            mLastConfigureAttempt = now;
             MLOGD << "Configuring decoder...";
             configureStartDecoder(0);
             configureStartDecoder(1);
@@ -197,6 +201,16 @@ void VideoDecoder::configureStartDecoder(int idx)
         MLOGD << "Cannot configure decoder";
         // set csd-0 and csd-1 back to 0, maybe they were just faulty but we have better luck with the next ones
         // mKeyFrameFinder.reset();
+        return;
+    }
+    if (status != AMEDIA_OK)
+    {
+        // Not started and not marked configured: the next key frame tries again. Starting it
+        // anyway, as this used to, fed every NALU to a codec in the uninitialized state for
+        // the rest of the session - a surface that was busy for a moment meant no video ever.
+        MLOGD << "configure failed, retrying with a later key frame";
+        AMediaCodec_delete(decoder.codec[idx]);
+        decoder.codec[idx] = nullptr;
         return;
     }
     AMediaCodec_start(decoder.codec[idx]);

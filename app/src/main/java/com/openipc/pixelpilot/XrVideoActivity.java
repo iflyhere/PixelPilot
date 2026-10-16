@@ -168,7 +168,9 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     private Surface xrSurface;
     private volatile String lastStatus = "";
     private boolean videoSeen;
-    private boolean statusScreenUsable = true;
+    /** Two, so the symbology thread never draws one while it is being repainted. */
+    private final android.graphics.Bitmap[] statusBuffers = new android.graphics.Bitmap[2];
+    private int statusBuffer;
     private ParcelFileDescriptor dvrFd;
 
     // Link quality haptics
@@ -601,30 +603,31 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     // ------------------------------------------------------------------------------
 
     /**
-     * Paints status straight into the compositor swapchain's Surface.
+     * Paints the status into a bitmap behind the symbology, once a second until video arrives.
      *
-     * <p>Only valid until MediaCodec becomes the producer for that Surface - a buffer queue
-     * has one producer - so this stops as soon as a frame has been decoded, and gives up
-     * quietly if the canvas is refused.
+     * <p>Not into the video's own surface, which is where it was at first: a buffer queue has
+     * one producer, and once the status screen had connected to it the decoder's configure
+     * failed (nativeWindowConnect, -22) and it never tried again. That only showed once the
+     * camera sent key frames ten seconds apart - with frequent ones the decoder usually won.
      */
     private void drawStatusScreen() {
-        if (videoSeen || !statusScreenUsable || xrSurface == null || !xrSurface.isValid()) {
+        final XrOverlay layer = overlays[XrGoggleSession.OVERLAY_SYMBOLOGY];
+        if (videoSeen) {
+            if (layer instanceof XrSymbology) {
+                ((XrSymbology) layer).setBackdrop(null);
+            }
             return;
         }
-        Canvas canvas = null;
-        try {
-            canvas = xrSurface.lockHardwareCanvas();
-            if (canvas == null) {
-                statusScreenUsable = false;
-                return;
+        if (layer instanceof XrSymbology) {
+            android.graphics.Bitmap b = statusBuffers[statusBuffer];
+            if (b == null) {
+                // Half the layer's resolution is plenty for text this size.
+                b = android.graphics.Bitmap.createBitmap(1280, 720, android.graphics.Bitmap.Config.ARGB_8888);
+                statusBuffers[statusBuffer] = b;
             }
-            paintStatus(canvas);
-            xrSurface.unlockCanvasAndPost(canvas);
-        } catch (Throwable t) {
-            // Most likely the decoder already connected as the producer.
-            Log.w(TAG, "status screen unavailable: " + t);
-            statusScreenUsable = false;
-            return;
+            paintStatus(new Canvas(b));
+            ((XrSymbology) layer).setBackdrop(b);
+            statusBuffer ^= 1;
         }
         handler.postDelayed(this::drawStatusScreen, 1000);
     }
@@ -770,6 +773,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         }
         Log.i(TAG, "stream resolution " + videoW + "x" + videoH);
         videoSeen = true;
+        // At once rather than on the next status tick, so the picture is not hidden for a second.
+        handler.post(this::drawStatusScreen);
         if (xr != null) {
             xr.setVideoResolution(videoW, videoH);
         }
