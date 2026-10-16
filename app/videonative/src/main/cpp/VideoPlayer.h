@@ -15,8 +15,8 @@
 #include "BufferedPacketQueue.h"
 #include "UdpReceiver.h"
 #include "UdsReceiver.h"
+#include "DvrWriter.h"
 #include "VideoDecoder.h"
-#include "minimp4.h"
 #include "parser/H26XParser.h"
 #include "time_util.h"
 
@@ -80,12 +80,19 @@ class VideoPlayer
 
     // A NALU is a non-owning view onto the parser's buffer (see NALU.hpp), which is
     // reused for the next packet. The DVR writer runs on its own thread, so what gets
-    // handed over has to own its bytes.
+    // handed over has to own its bytes. Audio goes through the same queue, as whole RTP
+    // packets, so the writer sees both in the order they arrived.
     struct DvrNalu
     {
-        std::vector<uint8_t> data;
-        bool                 is_h265 = false;
+        std::vector<uint8_t>                  data;
+        bool                                  is_h265 = false;
+        bool                                  audio   = false;
+        std::chrono::steady_clock::time_point at;
     };
+
+    // When audio last arrived. A recording gets a sound track if it is arriving as it starts.
+    std::atomic<uint64_t> lastAudioMs{0};
+    bool audioArriving() const { return get_time_ms() - lastAudioMs.load() < 3000; }
 
     // DVR attributes
     int                     dvr_fd;

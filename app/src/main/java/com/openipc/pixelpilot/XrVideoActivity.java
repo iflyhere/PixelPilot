@@ -185,6 +185,14 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     /** Whether the headset draws its own symbology - false when the camera burns its OSD in. */
     private boolean symbologyShown = true;
     private ParcelFileDescriptor dvrFd;
+    /** A recording in Movies/PixelPilot, published when it stops; null for a picked folder. */
+    @Nullable
+    private Uri dvrMovie;
+    /** When the running recording started, on elapsedRealtime; 0 when none is. */
+    private long dvrSince;
+    /** "start" or "stop", from a debug intent, applied once the link is up. */
+    @Nullable
+    private String pendingDvr;
 
     // Link quality haptics
     private long lastHapticAt;
@@ -267,6 +275,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             flightLog = FlightLog.open(this, flightData, cameraStats);
             logEvent("session", "immersive mode starting");
         }
+        handleTestIntent(getIntent());
     }
 
     /** Records something in the flight log, if there is one. */
@@ -445,6 +454,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         logEvent("video", "first surface handed to the decoder");
         statusView.setVisibility(View.GONE);
         linkStarted = true;
+        applyPendingDvr();
     }
 
     private void applyRefreshRatePreference() {
@@ -533,6 +543,7 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             case XrGoggleSession.OVERLAY_SYMBOLOGY: {
                 final XrSymbology symbology = new XrSymbology(surface, width, height, flightData);
                 symbology.setSymbologyShown(symbologyShown);
+                symbology.setRecordingSince(dvrFd != null ? dvrSince : 0);
                 overlay = symbology;
                 break;
             }
@@ -765,34 +776,93 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         if (dvrFd != null) {
             stopDvr();
             xr.haptic(0.7f, 60);
-            Toast.makeText(this, "Recording stopped", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (!DvrFiles.hasRecordingFolder(this)) {
-            // Picking a folder needs the flat activity; refuse rather than drop out of VR.
-            xr.haptic(1.0f, 250);
-            Toast.makeText(this, "Pick a DVR folder in flat mode first", Toast.LENGTH_LONG).show();
-            return;
-        }
-        Uri target = DvrFiles.createRecording(this);
-        if (target == null) {
-            xr.haptic(1.0f, 250);
-            Toast.makeText(this, "Could not create the recording file", Toast.LENGTH_LONG).show();
+            Log.i(TAG, "recording stopped");
             return;
         }
         if (link == null) {
+            return;
+        }
+        // A picked folder if there is one. Without one this used to refuse - with a buzz, and a
+        // toast nobody in the headset can see - so recording in VR silently did not work until
+        // someone went back to flat mode to pick a folder. Movies/PixelPilot needs no picking.
+        final boolean folder = DvrFiles.hasRecordingFolder(this);
+        Uri target = folder ? DvrFiles.createRecording(this) : DvrFiles.createMovieRecording(this);
+        dvrMovie = folder ? null : target;
+        if (target == null) {
+            xr.haptic(1.0f, 250);
+            Toast.makeText(this, "Could not create the recording file", Toast.LENGTH_LONG).show();
             return;
         }
         try {
             dvrFd = getContentResolver().openFileDescriptor(target, "rw");
             link.startDvr(dvrFd.getFd(), DvrFiles.fragmentedMp4(this));
             xr.haptic(0.7f, 120);
-            Toast.makeText(this, "Recording", Toast.LENGTH_SHORT).show();
+            Log.i(TAG, "recording to " + target);
+            logEvent("dvr", "recording to " + target);
+            showRecording();
         } catch (IOException e) {
             Log.e(TAG, "Failed to open dvr file", e);
             dvrFd = null;
+            dvrMovie = null;
             xr.haptic(1.0f, 250);
         }
+    }
+
+    /**
+     * In the headset a toast is invisible, so these are the only signs: a red dot with the
+     * running time on the video, and REC on the dashboard.
+     */
+    private void showRecording() {
+        final boolean on = dvrFd != null;
+        if (on && dvrSince == 0) {
+            dvrSince = android.os.SystemClock.elapsedRealtime();
+        } else if (!on) {
+            dvrSince = 0;
+        }
+        if (dashboard != null) {
+            dashboard.setNote(on ? "REC" : "");
+        }
+        final XrOverlay layer = overlays[XrGoggleSession.OVERLAY_SYMBOLOGY];
+        if (layer instanceof XrSymbology) {
+            ((XrSymbology) layer).setRecordingSince(dvrSince);
+        }
+    }
+
+    /**
+     * Debug builds only: start or stop a recording from adb, so it can be tested with nobody
+     * in the headset -
+     * {@code am start -n com.openipc.pixelpilot/.XrVideoActivity --es dvr start} (or stop).
+     */
+    private void handleTestIntent(@Nullable Intent intent) {
+        if (intent == null
+                || (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0) {
+            return;
+        }
+        final String dvr = intent.getStringExtra("dvr");
+        if (dvr == null) {
+            return;
+        }
+        intent.removeExtra("dvr");
+        pendingDvr = dvr;
+        applyPendingDvr();
+    }
+
+    private void applyPendingDvr() {
+        if (pendingDvr == null || link == null || !linkStarted) {
+            return;
+        }
+        final boolean start = "start".equals(pendingDvr);
+        pendingDvr = null;
+        if (start != (dvrFd != null)) {
+            toggleDvr();
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleTestIntent(intent);
     }
 
     private void stopDvr() {
@@ -808,6 +878,12 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             Log.e(TAG, "Failed to close dvr file", e);
         }
         dvrFd = null;
+        DvrFiles.finishMovieRecording(this, dvrMovie);
+        if (dvrMovie != null) {
+            logEvent("dvr", "recording finished " + dvrMovie);
+        }
+        dvrMovie = null;
+        showRecording();
     }
 
     // ------------------------------------------------------------------------------

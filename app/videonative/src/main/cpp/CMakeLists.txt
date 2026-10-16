@@ -12,6 +12,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         UdpReceiver.cpp
         UdsReceiver.cpp
         VideoDecoder.cpp
+        DvrWriter.cpp
         VideoPlayer.cpp)
 
 

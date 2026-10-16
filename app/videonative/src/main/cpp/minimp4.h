@@ -72,6 +72,10 @@ extern "C"
 #define MP4_OBJECT_TYPE_AVC 0x21
 // H.265 (HEVC) video
 #define MP4_OBJECT_TYPE_HEVC 0x23
+// Opus, as MP4RA registers it. Not written into an esds: an Opus track gets its own 'Opus'
+// sample entry with a 'dOps' box ("Encapsulation of Opus in ISO Base Media File Format"), which
+// is what ffmpeg, VLC and browsers read. Patched in for PixelPilot's recordings.
+#define MP4_OBJECT_TYPE_OPUS 0xAD
 // http://www.mp4ra.org/object.html 0xC0-E0  && 0xE2 - 0xFE are specified as "user private"
 #define MP4_OBJECT_TYPE_USER_PRIVATE 0xC0
 
@@ -566,6 +570,8 @@ enum
     BOX_ipir = FOUR_CHAR_INT('i', 'p', 'i', 'r'),  // IPIReferenceAtomType
     BOX_mp4s = FOUR_CHAR_INT('m', 'p', '4', 's'),  // MPEGSampleEntryAtomType
     BOX_mp4a = FOUR_CHAR_INT('m', 'p', '4', 'a'),  // MPEGAudioSampleEntryAtomType
+    BOX_Opus = FOUR_CHAR_INT('O', 'p', 'u', 's'),  // OpusSampleEntry
+    BOX_dOps = FOUR_CHAR_INT('d', 'O', 'p', 's'),  // OpusSpecificBox
     BOX_mp4v = FOUR_CHAR_INT('m', 'p', '4', 'v'),  // MPEGVisualSampleEntryAtomType
 
     // http://www.itscj.ipsj.or.jp/sc29/open/29view/29n7644t.doc
@@ -1475,7 +1481,31 @@ static int mp4e_flush_index(MP4E_mux_t* mux)
         ATOM_FULL(BOX_stsd, 0);
         WRITE_4(1);  // entry_count;
 
-        if (tr->info.track_media_kind == e_audio || tr->info.track_media_kind == e_private)
+        if (tr->info.track_media_kind == e_audio && tr->info.object_type_indication == MP4_OBJECT_TYPE_OPUS)
+        {
+            // OpusSampleEntry: an AudioSampleEntry at 48 kHz, whatever the input rate was.
+            ATOM(BOX_Opus);
+            WRITE_4(0);
+            WRITE_2(0);  // reserved[6]
+            WRITE_2(1);  // data_reference_index
+            WRITE_4(0);
+            WRITE_4(0);                          // reserved[2]
+            WRITE_2(tr->info.u.a.channelcount);  // channelcount
+            WRITE_2(16);                         // samplesize
+            WRITE_4(0);                          // pre_defined+reserved
+            WRITE_4(48000u << 16);               // samplerate
+            // OpusSpecificBox - a plain box, big-endian, unlike Ogg's OpusHead.
+            ATOM(BOX_dOps);
+            WRITE_1(0);                          // Version
+            WRITE_1(tr->info.u.a.channelcount);  // OutputChannelCount
+            WRITE_2(0);                          // PreSkip: joined mid-stream, nothing to trim
+            WRITE_4(48000);                      // InputSampleRate
+            WRITE_2(0);                          // OutputGain
+            WRITE_1(0);                          // ChannelMappingFamily: mono or stereo
+            END_ATOM;
+            END_ATOM;
+        }
+        else if (tr->info.track_media_kind == e_audio || tr->info.track_media_kind == e_private)
         {
             // AudioSampleEntry() assume MP4E_HANDLER_TYPE_SOUN
             if (tr->info.track_media_kind == e_audio)

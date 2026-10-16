@@ -43,6 +43,18 @@ public final class XrSymbology extends XrOverlay {
         symbologyShown = shown;
     }
 
+    /**
+     * When the running recording started, on {@link android.os.SystemClock#elapsedRealtime};
+     * 0 when nothing is recording. The mark sits on the video because that is where the pilot
+     * looks: a note on the dashboard below is easy to fly a whole pack without seeing.
+     */
+    private volatile long recordingSince;
+    private final Paint recPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    public void setRecordingSince(long elapsedRealtimeMs) {
+        recordingSince = elapsedRealtimeMs;
+    }
+
     public XrSymbology(Surface surface, int width, int height, FlightData data) {
         // 40ms: the air side sends attitude at about 20Hz, so more would redraw the same angle.
         super("XrSymbology", surface, width, height, 20, 40);
@@ -60,6 +72,8 @@ public final class XrSymbology extends XrOverlay {
             backdropRect.set(0f, 0f, width, height);
             canvas.drawBitmap(b, null, backdropRect, backdropPaint);
         }
+        // Before the symbology check: it has to show with the camera's own OSD too.
+        recording(canvas);
         if (!symbologyShown) {
             return;
         }
@@ -135,6 +149,32 @@ public final class XrSymbology extends XrOverlay {
 
         text(canvas, String.format(Locale.US, "%+.0f", s.roll), cx, top - u * 0.28f, u * 0.42f,
                 INK, Paint.Align.CENTER, true);
+    }
+
+    /** A red dot and the running time, top left, the way a camera shows it. */
+    private void recording(Canvas canvas) {
+        final long since = recordingSince;
+        if (since == 0) {
+            return;
+        }
+        final long ms = Math.max(0, android.os.SystemClock.elapsedRealtime() - since);
+        final float r = u * 0.34f;
+        final float x = u * 1.25f;
+        final float y = u * 1.25f;
+        // Slow blink, so it catches the eye without flickering in the corner of it.
+        if (ms % 1000 < 700) {
+            recPaint.setStyle(Paint.Style.FILL);
+            recPaint.setColor(android.graphics.Color.argb(168, 0, 0, 0));
+            canvas.drawCircle(x, y, r + Math.max(2f, u * 0.07f), recPaint);
+            recPaint.setColor(ALERT);
+            canvas.drawCircle(x, y, r, recPaint);
+        }
+        final long s = ms / 1000;
+        final String time = s >= 3600
+                ? String.format(Locale.US, "REC %d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                : String.format(Locale.US, "REC %02d:%02d", s / 60, s % 60);
+        text(canvas, time, x + r + u * 0.30f, y + u * 0.24f, u * 0.66f, INK, Paint.Align.LEFT,
+                true);
     }
 
     private void reticle(Canvas canvas, float cx, float cy) {

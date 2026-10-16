@@ -40,15 +40,22 @@ static int write_callback(int64_t offset, const void* buffer, size_t size, void*
 
 void VideoPlayer::processQueue()
 {
-    ::FILE*           fout = fdopen(dvr_fd, "wb");
-    MP4E_mux_t*       mux  = MP4E_open(0 /*sequential_mode*/, dvr_mp4_fragmentation, fout, write_callback);
-    mp4_h26x_writer_t mp4wr;
-    float             framerate = 0;
-    if (mux == nullptr)
+    ::FILE* fout = fdopen(dvr_fd, "wb");
+    if (fout == nullptr)
     {
         __android_log_print(ANDROID_LOG_ERROR, TAG, "dvr open failed");
+        dvr_fd = -1;
         return;
     }
+    DvrWriter writer(write_callback, fout, dvr_mp4_fragmentation != 0);
+    if (!writer.ok())
+    {
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "dvr open failed");
+        fclose(fout);
+        dvr_fd = -1;
+        return;
+    }
+    bool loggedStart = false;
 
     while (true)
     {
@@ -59,51 +66,33 @@ void VideoPlayer::processQueue()
         {
             break;
         }
-        if (!naluQueue.empty())
+        DvrNalu item = std::move(naluQueue.front());
+        naluQueue.pop();
+        lock.unlock();
+        if (item.audio)
         {
-            if (framerate == 0)
+            writer.audio(item.data.data(), item.data.size(), item.at);
+        }
+        else
+        {
+            writer.video(item.data.data(), item.data.size(), item.is_h265, latestVideoRatio.width,
+                         latestVideoRatio.height, latestDecodingInfo.currentFPS, audioArriving(), item.at);
+            if (!loggedStart && writer.videoSamples() > 0)
             {
-                if (latestDecodingInfo.currentFPS <= 0)
-                {
-                    continue;
-                }
-                const bool is_h265 = naluQueue.front().is_h265;
-                if (MP4E_STATUS_OK !=
-                    mp4_h26x_write_init(&mp4wr, mux, latestVideoRatio.width, latestVideoRatio.height, is_h265))
-                {
-                    __android_log_print(ANDROID_LOG_DEBUG, TAG, "error: mp4_h26x_write_init failed");
-                }
-                framerate = latestDecodingInfo.currentFPS;
-                __android_log_print(
-                    ANDROID_LOG_DEBUG,
-                    TAG,
-                    "mp4 init with fps=%.2f, res=%dx%d, hevc=%d",
-                    framerate,
-                    latestVideoRatio.width,
-                    latestVideoRatio.height,
-                    is_h265);
-            }
-            DvrNalu nalu = std::move(naluQueue.front());
-            naluQueue.pop();
-            lock.unlock();
-            // Process the NALU
-            auto res = mp4_h26x_write_nal(&mp4wr, nalu.data.data(), (int) nalu.data.size(), 90000 / framerate);
-            if (MP4E_STATUS_OK != res)
-            {
-                __android_log_print(ANDROID_LOG_DEBUG, TAG, "mp4_h26x_write_nal failed with %d", res);
+                loggedStart = true;
+                __android_log_print(ANDROID_LOG_INFO, TAG, "dvr recording %dx%d %s, %s",
+                                    latestVideoRatio.width, latestVideoRatio.height,
+                                    item.is_h265 ? "h265" : "h264",
+                                    writer.hasAudioTrack() ? "with sound" : "no sound arriving");
             }
         }
     }
 
-    MP4E_close(mux);
-    mp4_h26x_write_close(&mp4wr);
-    if (fout)
-    {
-        fclose(fout);
-        fout = NULL;
-    }
+    writer.close();
+    fclose(fout);
     dvr_fd = -1;
-    __android_log_print(ANDROID_LOG_DEBUG, TAG, "dvr thread done");
+    __android_log_print(ANDROID_LOG_INFO, TAG, "dvr done: %d frames, %d audio packets", writer.videoSamples(),
+                        writer.audioSamples());
 }
 
 // Not yet parsed bit stream (e.g. raw h264 or rtp data)
@@ -128,6 +117,12 @@ void VideoPlayer::onNewRTPData(const uint8_t* data, const std::size_t data_lengt
         if (rtpPacket.header.payload == RTP_PAYLOAD_TYPE_AUDIO)
         {
             audioDecoder.enqueueAudio(packet_data, packet_length);
+            lastAudioMs = get_time_ms();
+            if (dvr_fd > 0)
+            {
+                enqueueNALU(DvrNalu{std::vector<uint8_t>(packet_data, packet_data + packet_length), false,
+                                    true, std::chrono::steady_clock::now()});
+            }
         }
         else
         {
@@ -149,13 +144,13 @@ void VideoPlayer::onNewRTPData(const uint8_t* data, const std::size_t data_lengt
 void VideoPlayer::onNewNALU(const NALU& nalu)
 {
     videoDecoder.interpretNALU(nalu);
-    if (dvr_fd <= 0 || latestDecodingInfo.currentFPS <= 0)
+    if (dvr_fd <= 0)
     {
         return;
     }
     // The writer thread outlives this call, so hand it an owning copy.
     enqueueNALU(DvrNalu{std::vector<uint8_t>(nalu.getData(), nalu.getData() + nalu.getSize()),
-                        nalu.IS_H265_PACKET});
+                        nalu.IS_H265_PACKET, false, std::chrono::steady_clock::now()});
 }
 
 void VideoPlayer::setVideoSurface(JNIEnv* env, jobject surface, jint i)

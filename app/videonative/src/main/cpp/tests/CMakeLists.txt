@@ -39,3 +39,13 @@ target_link_libraries(queue_test
 # Discover and register the test with CTest
 include(GoogleTest)
 gtest_discover_tests(queue_test)
+
+# ---------- The recorder: H.265 + Opus into MP4, checked box by box -------------
+add_executable(dvr_test
+    DvrWriter_test.cpp
+    ../DvrWriter.cpp
+)
+target_include_directories(dvr_test PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+set_property(TARGET dvr_test PROPERTY CXX_STANDARD 20)
+target_link_libraries(dvr_test GTest::gtest_main)
+gtest_discover_tests(dvr_test)
