@@ -48,6 +48,8 @@ public abstract class XrOverlay {
 
     /** See setGrabbed(): written from the main thread, read on the draw thread. */
     private volatile boolean grabbed;
+    /** See setHovered(): the same. */
+    private volatile boolean hovered;
     private final Paint grabPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private final HandlerThread thread;
@@ -105,6 +107,14 @@ public abstract class XrOverlay {
     }
 
     /**
+     * Whether the pointer's beam is on this instrument: a thinner, fainter frame than the one
+     * for holding it, so a pilot can see what the trigger would take hold of before pulling it.
+     */
+    public void setHovered(boolean on) {
+        hovered = on;
+    }
+
+    /**
      * Everything that goes onto one frame: clear, the subclass, then the grab outline.
      *
      * <p>Factored out of the frame loop so the off-headset preview can render exactly what
@@ -115,12 +125,25 @@ public abstract class XrOverlay {
         canvas.drawColor(0, PorterDuff.Mode.CLEAR);
         draw(canvas);
         if (grabbed) {
+            styleOutline(true);
+            outlineGrab(canvas);
+        } else if (hovered) {
+            styleOutline(false);
             outlineGrab(canvas);
         }
     }
 
+    /** Held: solid and heavy. Pointed at: the same colour, lighter and thinner. */
+    private void styleOutline(boolean held) {
+        grabPaint.setStyle(Paint.Style.STROKE);
+        grabPaint.setColor(held ? ACCENT : Color.argb(170, Color.red(ACCENT), Color.green(ACCENT),
+                Color.blue(ACCENT)));
+        grabPaint.setStrokeWidth(held ? Math.max(2.5f, u * 0.13f) : Math.max(1.5f, u * 0.07f));
+    }
+
     /**
-     * A frame just inside the edge, in the accent colour, while the panel is held.
+     * A frame just inside the edge, in the accent colour, while the panel is held or pointed
+     * at - styled by the caller, so an override only draws the shape.
      *
      * <p>Overridable because a layer's bitmap is not always the shape of what it draws: the
      * minimap is a circle in a square, and a rounded rectangle around it reads as a frame
@@ -128,7 +151,6 @@ public abstract class XrOverlay {
      */
     protected void outlineGrab(Canvas canvas) {
         final float inset = grabInset();
-        grabPaint().setColor(ACCENT);
         canvas.drawRoundRect(inset, inset, width - inset, height - inset, u * 0.5f, u * 0.5f,
                 grabPaint());
     }
@@ -138,8 +160,6 @@ public abstract class XrOverlay {
     }
 
     protected final Paint grabPaint() {
-        grabPaint.setStyle(Paint.Style.STROKE);
-        grabPaint.setStrokeWidth(Math.max(2.5f, u * 0.13f));
         return grabPaint;
     }
 

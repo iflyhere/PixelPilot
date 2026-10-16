@@ -843,9 +843,8 @@ public class VideoActivity extends LinkClientActivity
             return false;
         });
 
-        // On by default. It shares the trigger with the video distance, which is why it is
-        // switchable at all: aimed at nothing the trigger still pulls the video nearer, and a
-        // pilot who never rearranges anything should be able to have that unconditionally.
+        // On by default: a trigger pull aimed at one panel is a deliberate act, and the beam
+        // only shows while a finger rests on the controller. Off, there is no beam at all.
         MenuItem dragOverlays = xrMenu.add("Move instruments by pointing");
         dragOverlays.setCheckable(true);
         dragOverlays.setChecked(prefs.getBoolean(XrVideoActivity.PREF_OVERLAY_DRAG, true));
@@ -854,7 +853,7 @@ public class VideoActivity extends LinkClientActivity
             item.setChecked(enabled);
             prefs.edit().putBoolean(XrVideoActivity.PREF_OVERLAY_DRAG, enabled).apply();
             Toast.makeText(this, enabled
-                    ? "Point at a panel and hold the trigger to move it; stick sizes it"
+                    ? "Point at a panel or the video, hold the trigger and move it; the stick pushes it away and sizes it"
                     : "Instruments stay where they are", Toast.LENGTH_LONG).show();
             item.setShowAsAction(MenuItem.SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW);
             item.setActionView(new View(this));
@@ -909,10 +908,12 @@ public class VideoActivity extends LinkClientActivity
         addMapImport(maps, "Basemap", MapFiles.Kind.BASEMAP, PICK_BASEMAP_REQUEST_CODE);
         addMapImport(maps, "Terrain (height)", MapFiles.Kind.TERRAIN, PICK_TERRAIN_REQUEST_CODE);
 
-        MenuItem help = xrMenu.add("A/X recenter, B/Y passthrough, stick click record, trigger grabs a panel, left menu button leaves VR");
+        MenuItem help = xrMenu.add("A/X recenter, B/Y passthrough, stick click record, left menu button leaves VR");
         help.setEnabled(false);
-        MenuItem help2 = xrMenu.add("Stick height/size, trigger nearer, grip farther, menu exits");
+        MenuItem help2 = xrMenu.add("Trigger takes hold of what the beam is on - a panel or the video; while held the stick pushes it away and sizes it");
         help2.setEnabled(false);
+        MenuItem help3 = xrMenu.add("Stick alone: video up/down and size");
+        help3.setEnabled(false);
     }
 
     /**

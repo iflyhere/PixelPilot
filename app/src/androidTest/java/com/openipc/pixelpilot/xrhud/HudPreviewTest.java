@@ -402,7 +402,9 @@ public class HudPreviewTest {
         // The video quad, at its default placement, then the instruments on top.
         drawPanel(c, sym, 0f, 0f, 0f, 1.6f, 2.2f, sym.getHeight() / (float) sym.getWidth(), f,
                 outW, outH);
-        drawPanel(c, dash, 0f, -30f, 0f, 1.40f, 1.40f * 30f * (float) Math.PI / 180f, 0.75f, f,
+        // 15 degrees of arc: what the headset has actually shown all along. See the cylinder in
+        // xri::defaultLayout() for why it was never the 30 this used to say.
+        drawPanel(c, dash, 0f, -30f, 0f, 1.40f, 1.40f * 15f * (float) Math.PI / 180f, 0.75f, f,
                 outW, outH);
         drawPanel(c, map, -25f, -30f, 26f, 1.25f, 0.42f, 1.0f, f, outW, outH);
         drawPanel(c, chart, 25f, -30f, 26f, 1.25f, 0.54f,

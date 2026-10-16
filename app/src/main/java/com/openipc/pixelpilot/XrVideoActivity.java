@@ -36,6 +36,7 @@ import com.openipc.pixelpilot.xrhud.XrChart;
 import com.openipc.pixelpilot.xrhud.XrDashboard;
 import com.openipc.pixelpilot.xrhud.XrMinimap;
 import com.openipc.pixelpilot.xrhud.XrOverlay;
+import com.openipc.pixelpilot.xrhud.XrPointerArt;
 import com.openipc.pixelpilot.xrhud.XrSymbology;
 import com.openipc.wfbngrtl8812.WfbNGStats;
 import com.openipc.xr.XrGoggleSession;
@@ -142,8 +143,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     private XrGoggleSession xr;
     /** What every instrument reads. Written from the main thread, read from their threads. */
     private final FlightData flightData = new FlightData();
-    /** One entry per OVERLAY_* id; null where the runtime granted no layer. */
-    private final XrOverlay[] overlays = new XrOverlay[XrGoggleSession.OVERLAY_COUNT];
+    /** One entry per OVERLAY_* and POINTER_* id; null where the runtime granted no layer. */
+    private final XrOverlay[] overlays = new XrOverlay[XrGoggleSession.SURFACE_COUNT];
     @Nullable
     private XrDashboard dashboard;
     /** Feeds the terrain profile and the basemap from whatever is installed offline. */
@@ -443,6 +444,15 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     }
 
     @Override
+    public void onXrOverlayHover(int id) {
+        for (int i = 0; i < XrGoggleSession.OVERLAY_COUNT; i++) {
+            if (overlays[i] != null) {
+                overlays[i].setHovered(i == id);
+            }
+        }
+    }
+
+    @Override
     public void onXrOverlayMoved(int id, float yawDeg, float pitchDeg, float tiltDeg,
                                  float distance, float widthM) {
         // Called on release rather than per frame, so writing straight through is fine.
@@ -481,6 +491,9 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             case XrGoggleSession.BUTTON_LOWER:
                 prefs().edit().putFloat(PREF_QUAD_HEIGHT, xr.quadHeightOffset()).apply();
                 break;
+            case XrGoggleSession.BUTTON_VIDEO_MOVED:
+                persistGeometry();
+                break;
             default:
                 break;
         }
@@ -505,6 +518,12 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
                 break;
             case XrGoggleSession.OVERLAY_CHART:
                 overlay = new XrChart(surface, width, height, flightData);
+                break;
+            case XrGoggleSession.POINTER_BEAM:
+                overlay = XrPointerArt.beam(surface, width, height);
+                break;
+            case XrGoggleSession.POINTER_CURSOR:
+                overlay = XrPointerArt.cursor(surface, width, height);
                 break;
             default:
                 Log.w(TAG, "unknown overlay id " + id);
@@ -678,7 +697,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         hint.setColor(Color.rgb(130, 140, 155));
         canvas.drawText("A recenter    B passthrough    stick click record", cx, y, hint);
         y += h / 26f;
-        canvas.drawText("trigger on a panel moves it, thumbstick sizes it", cx, y, hint);
+        canvas.drawText("trigger takes hold of a panel or the video, stick pushes and sizes it",
+                cx, y, hint);
         y += h / 26f;
         // The left menu button is the only way out from in here, so it says so. The thumb
         // swipe this used to offer is gone - it was removed along with the other exit

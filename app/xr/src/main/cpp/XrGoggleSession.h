@@ -24,6 +24,8 @@
 #include <string>
 #include <vector>
 
+#include "XrInteraction.h"
+
 class XrGoggleSession
 {
   public:
@@ -37,6 +39,9 @@ class XrGoggleSession
         BUTTON_RAISE      = 4,
         BUTTON_LOWER      = 5,
         BUTTON_EXIT       = 6,
+        // Not a button: the video was let go of after being moved or resized with the
+        // pointer, which is when its geometry is worth saving.
+        BUTTON_VIDEO_MOVED = 7,
     };
 
     XrGoggleSession()  = default;
@@ -95,27 +100,49 @@ class XrGoggleSession
 
     enum Overlay
     {
-        OVERLAY_SYMBOLOGY = 0,
-        OVERLAY_DASHBOARD,
-        OVERLAY_MINIMAP,
-        OVERLAY_CHART,
-        OVERLAY_COUNT
+        OVERLAY_SYMBOLOGY = xri::LAYER_SYMBOLOGY,
+        OVERLAY_DASHBOARD = xri::LAYER_DASHBOARD,
+        OVERLAY_MINIMAP   = xri::LAYER_MINIMAP,
+        OVERLAY_CHART     = xri::LAYER_CHART,
+        OVERLAY_COUNT     = xri::LAYER_COUNT
     };
 
-    /** Producer side of an overlay layer, or null if the runtime would not give us one. */
+    /**
+     * The pointer's two pictures: the beam, and the cursor's frames side by side. Handed out
+     * like the overlays so the app draws them, but placed by the pointer every frame rather
+     * than by the layout - and drawn once, since they never change.
+     */
+    enum PointerArt
+    {
+        POINTER_BEAM = OVERLAY_COUNT,
+        POINTER_CURSOR,
+        SURFACE_COUNT
+    };
+
+    static constexpr int kBeamArtWidth    = 32;
+    static constexpr int kBeamArtHeight   = 256;
+    static constexpr int kCursorArtCell   = 64;
+
+    /** Producer side of an overlay or pointer layer, or null if the runtime would not give us one. */
     jobject overlaySurface(int id) const
     {
-        return (id >= 0 && id < OVERLAY_COUNT) ? mOverlays[id].surface : nullptr;
+        if (id >= 0 && id < OVERLAY_COUNT) return mOverlays[id].surface;
+        if (id >= POINTER_BEAM && id < SURFACE_COUNT) return mPointerArt[id - POINTER_BEAM].surface;
+        return nullptr;
     }
 
     int overlayWidth(int id) const
     {
-        return (id >= 0 && id < OVERLAY_COUNT) ? mOverlays[id].width : 0;
+        if (id >= 0 && id < OVERLAY_COUNT) return mOverlays[id].width;
+        if (id >= POINTER_BEAM && id < SURFACE_COUNT) return mPointerArt[id - POINTER_BEAM].width;
+        return 0;
     }
 
     int overlayHeight(int id) const
     {
-        return (id >= 0 && id < OVERLAY_COUNT) ? mOverlays[id].height : 0;
+        if (id >= 0 && id < OVERLAY_COUNT) return mOverlays[id].height;
+        if (id >= POINTER_BEAM && id < SURFACE_COUNT) return mPointerArt[id - POINTER_BEAM].height;
+        return 0;
     }
 
     /** Drops a layer from the frame. Off costs nothing per frame. */
@@ -125,12 +152,11 @@ class XrGoggleSession
     }
 
     /**
-     * Whether pointing at an instrument and squeezing may move it.
+     * Whether a controller may point at the instruments and the video and move them.
      *
      * <p>On by default, unlike hand input: a trigger pull aimed at a particular panel is a
-     * deliberate act, where a hand gesture is something the recogniser decides you did. The
-     * switch exists because the trigger already pulls the video nearer, and a pilot who never
-     * rearranges anything should be able to have that back unconditionally.
+     * deliberate act, where a hand gesture is something the recogniser decides you did. Off,
+     * there is no beam at all - for a pilot who never rearranges anything.
      */
     void setOverlayDragEnabled(bool enabled) { mDragEnabled.store(enabled); }
 
@@ -214,8 +240,9 @@ class XrGoggleSession
     void syncActions(JNIEnv* env, jobject listener);
     void applyPendingHaptic();
     void applyPassthroughState();
-    // Returns true on the frame a held action should fire, once per press.
-    bool heldActionFired(XrAction action, int slot, XrTime now);
+    // Returns true on the frame a held action should fire, once per press. mayAct false holds
+    // it off, and a press that began while it was false never fires.
+    bool heldActionFired(XrAction action, int slot, XrTime now, bool mayAct);
     void logInteractionProfiles();
     void applyPendingRefreshRate();
     void recenterAt(XrTime time);
@@ -242,15 +269,9 @@ class XrGoggleSession
         int         width     = 0;
         int         height    = 0;
 
-        // Placement, relative to where the video quad sits. Angles in degrees.
-        float yawDeg          = 0.0f;  // positive to the right
-        float pitchDeg        = 0.0f;  // positive up
-        float tiltDeg         = 0.0f;  // about its own X, to lay a panel back
-        float distance        = 0.0f;  // metres; 0 means "same as the video"
-        float widthM          = 0.0f;  // metres; 0 means "same as the video"
-        float aspect          = 0.0f;  // height/width; 0 means "from the pixel size"
-        bool  cylinder        = false;
-        float centralAngleDeg = 0.0f;
+        // Where it sits in the arrangement - see xri::Placement. Written by the frame loop
+        // while a panel is being moved, and by restore and reset from other threads.
+        xri::Placement place;
 
         std::atomic<bool> visible{true};
         const char*       name = "";
@@ -259,28 +280,47 @@ class XrGoggleSession
     OverlayLayer mOverlays[OVERLAY_COUNT];
     bool         mHasCylinder = false;
 
-    // --- moving an instrument by pointing at it -----------------------------------
-    // The layout lives in the same spherical coordinates the table is written in, which is
-    // what makes this cheap: an aim ray converts straight to a yaw and a pitch, so dragging
-    // is two subtractions rather than a scene graph.
+    struct PointerArtLayer
+    {
+        XrSwapchain swapchain = XR_NULL_HANDLE;
+        jobject     surface   = nullptr;
+        int         width     = 0;
+        int         height    = 0;
+    };
+    PointerArtLayer mPointerArt[SURFACE_COUNT - POINTER_BEAM];
+
+    // --- pointing at things and moving them ---------------------------------------
+    // The geometry and the state machine live in XrInteraction, which has no OpenXR in it
+    // and is tested on a desktop. This class only feeds it and applies what it says.
     std::atomic<bool> mDragEnabled{true};
     std::atomic<bool> mHandDragEnabled{false};
-    // Which layer is being held, or -1. Written and read only by the frame loop.
-    int   mDragOverlay  = -1;
-    // The angle between the ray and the layer's centre when it was grabbed, so the panel
-    // keeps the point you took hold of instead of snapping its middle to the pointer.
-    float mDragYawOffset   = 0.0f;
-    float mDragPitchOffset = 0.0f;
-    // Which hand took hold, so a two-controller session keeps following the one that grabbed.
-    int   mDragHand        = -1;
+    xri::Interaction  mInteraction;
+    // What the pointer drew this frame, composed after everything else.
+    xri::PointerOut   mPointers[2];
+    // Read by syncActions(), used by the frame that follows.
+    bool  mSelect[2] = {false, false};
+    // A trigger counts once it has been seen up since focus or a profile change.
+    bool  mSelectArmed[2] = {false, false};
+    bool  mTouch[2]  = {false, false};
+    float mStickX    = 0.0f;
+    float mStickY    = 0.0f;
+    // Whether each side is a tracked hand, from the last interaction profile change.
+    bool  mSideIsHand[2] = {false, false};
+    // Why each hand may not act right now, from the last frame - see xri::handBlock().
+    xri::HandBlock mHandBlock[2] = {xri::HAND_NOT_TRACKED, xri::HAND_NOT_TRACKED};
+    // How far a held hand gesture has got, 0..1, for the ring that shows it filling up.
+    float mHoldProgress[2] = {0.0f, 0.0f};
 
     /**
-     * Moves the held layer, or takes hold of one. Runs inside the frame loop because it
-     * needs the same anchor the overlays are composed against.
+     * Locates both hands, works out which may act, runs the pointer for this frame and
+     * applies what it moved. Inside the frame loop, because it needs the anchor the layers
+     * are composed against.
      */
-    void updateOverlayDrag(JNIEnv* env, jobject listener, const XrQuaternionf& baseOri,
-                           const XrVector3f& origin, XrSpace space, XrTime time,
-                           float videoWidthM);
+    void updatePointer(JNIEnv* env, jobject listener, const xri::Anchor& anchor,
+                       xri::Video* video, XrSpace layoutSpace, XrTime time, float dt);
+    void applyHapticTo(int hand, float amplitude, int ms);
+    // Only so every press can be logged once with what it was aimed at.
+    bool mPointerSelectWas[2] = {false, false};
 
     /**
      * Listener methods, looked up once per session.
@@ -295,25 +335,10 @@ class XrGoggleSession
     jmethodID mOnButton       = nullptr;
     jmethodID mOnOverlayGrab  = nullptr;
     jmethodID mOnOverlayMoved = nullptr;
+    jmethodID mOnOverlayHover = nullptr;
 
-    /** Which visible layer an aim ray hits first, or -1. */
-    int  pickOverlay(const XrVector3f& rayOrigin, const XrVector3f& rayDir,
-                     const XrQuaternionf& baseOri, const XrVector3f& origin,
-                     float videoWidthM) const;
-
-    /**
-     * A layer's size in metres. Shared by the compositor and the hit test on purpose: two
-     * copies of this would let you grab a panel somewhere other than where it is drawn.
-     */
-    void overlaySizeM(const OverlayLayer& o, float dist, float videoWidthM, float* w,
-                      float* h) const;
-
-    /**
-     * Whether that side is currently a tracked hand rather than a controller. The aim and
-     * grab actions are bound on both profiles, so this is what keeps a hand drag behind the
-     * same switch the gestures are behind while leaving controllers alone.
-     */
-    bool aimIsHand(int hand) const;
+    /** The arrangement as xri wants it, copied out of the layers' atomic-free fields. */
+    void currentPlacements(xri::Placement out[OVERLAY_COUNT]) const;
 
 
     XrPassthroughFB      mPassthrough      = XR_NULL_HANDLE;
@@ -326,8 +351,9 @@ class XrGoggleSession
     XrAction    mActionRecord       = XR_NULL_HANDLE;
     XrAction    mActionLockMode     = XR_NULL_HANDLE;
     XrAction    mActionStick        = XR_NULL_HANDLE;
-    XrAction    mActionNearer       = XR_NULL_HANDLE;
-    XrAction    mActionFarther      = XR_NULL_HANDLE;
+    // A finger resting on a controller - trigger, stick, buttons or thumb rest - which is
+    // what shows the beam. Per hand.
+    XrAction    mActionTouch        = XR_NULL_HANDLE;
     XrAction    mActionHandRecenter = XR_NULL_HANDLE;
     XrAction    mActionHandPassthrough = XR_NULL_HANDLE;
     XrAction    mActionRaise        = XR_NULL_HANDLE;
@@ -370,6 +396,8 @@ class XrGoggleSession
     bool                     mHasImageLayout     = false;
     bool                     mHasMicrogestures   = false;
     bool                     mHasSimultaneous    = false;
+    /** Whether the capacitive touch bindings took; without them the beam always shows. */
+    bool                     mHasTouchSensors    = false;
     bool                     mHasLayerSettings = false;
     bool                     mHasRefreshRate   = false;
 
@@ -397,8 +425,11 @@ class XrGoggleSession
     std::atomic<float> mPendingHapticAmplitude{0.0f};
     std::atomic<int>   mPendingHapticMs{0};
 
-    // Anchor for world-locked mode, in the LOCAL reference space.
-    XrPosef    mAnchorPose = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
+    // Anchor for world-locked mode, in the LOCAL reference space: where the head was at the
+    // last recenter, and which way it looked. The video and the instruments are both placed
+    // from it, so moving the video further away does not drag the instruments with it.
+    xri::Vec3  mAnchorEye;
+    xri::Quat  mAnchorFacing;
     bool       mAnchorValid = false;
 
     std::string        mManifestDir;
@@ -408,6 +439,8 @@ class XrGoggleSession
     {
         bool   down     = false;
         bool   fired    = false;
+        // Pressed while the hand was not free to act; ignored until it is let go.
+        bool   blocked  = false;
         XrTime downTime = 0;
     };
     HeldButton         mHeld[2];

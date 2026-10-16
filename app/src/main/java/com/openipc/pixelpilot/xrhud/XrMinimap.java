@@ -86,7 +86,6 @@ public final class XrMinimap extends XrOverlay {
     protected void outlineGrab(Canvas canvas) {
         // Round, because the card is - see the base class.
         final float r = Math.min(width, height) / 2f - grabInset();
-        grabPaint().setColor(ACCENT);
         canvas.drawCircle(width / 2f, height / 2f, r, grabPaint());
     }
 

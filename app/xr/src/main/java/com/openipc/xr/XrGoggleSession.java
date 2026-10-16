@@ -32,6 +32,11 @@ public final class XrGoggleSession {
     public static final int BUTTON_RAISE = 4;
     public static final int BUTTON_LOWER = 5;
     public static final int BUTTON_EXIT = 6;
+    /**
+     * Not a button: the video was let go of after being moved or resized with the pointer,
+     * which is when its distance, width and height are worth saving.
+     */
+    public static final int BUTTON_VIDEO_MOVED = 7;
 
     private static final String TAG = "pixelpilot-xr";
 
@@ -47,6 +52,23 @@ public final class XrGoggleSession {
     public static final int OVERLAY_MINIMAP = 2;
     public static final int OVERLAY_CHART = 3;
     public static final int OVERLAY_COUNT = 4;
+
+    /**
+     * The pointer's two pictures, announced through {@link Listener#onXrOverlayReady} like the
+     * instruments but placed by the pointer every frame. Drawn once: they never change, the
+     * native side picks which part of the cursor strip to show.
+     */
+    public static final int POINTER_BEAM = 4;
+    public static final int POINTER_CURSOR = 5;
+    public static final int SURFACE_COUNT = 6;
+
+    /** The cursor strip: square frames side by side. Keep in sync with xri::CursorFrame. */
+    public static final int CURSOR_IDLE = 0;
+    public static final int CURSOR_HOVER = 1;
+    public static final int CURSOR_HELD = 2;
+    public static final int CURSOR_PROGRESS_FIRST = 3;
+    public static final int CURSOR_PROGRESS_STEPS = 8;
+    public static final int CURSOR_FRAME_COUNT = CURSOR_PROGRESS_FIRST + CURSOR_PROGRESS_STEPS;
 
     private static boolean libraryLoaded;
 
@@ -86,6 +108,14 @@ public final class XrGoggleSession {
          * @param id one of the {@code OVERLAY_*} constants
          */
         void onXrOverlayGrab(int id, boolean grabbed);
+
+        /**
+         * The instrument the beam is on changed - for an outline, so a pilot can see what the
+         * trigger would take hold of. {@code -1} when it is on none of them.
+         *
+         * @param id one of the {@code OVERLAY_*} constants, or -1
+         */
+        void onXrOverlayHover(int id);
 
         /**
          * Where an instrument ended up, once it was let go. Sent on release rather than
@@ -219,7 +249,7 @@ public final class XrGoggleSession {
         }
         main.post(() -> listener.onXrReady(surface));
 
-        for (int id = 0; id < OVERLAY_COUNT; id++) {
+        for (int id = 0; id < SURFACE_COUNT; id++) {
             final Surface overlay = nativeGetOverlaySurface(h, id);
             if (overlay == null) {
                 Log.w(TAG, "overlay layer " + id + " not available from this runtime");
@@ -259,6 +289,12 @@ public final class XrGoggleSession {
 
     /** Called from the XR frame loop thread. */
     @Keep
+    void onXrOverlayHover(int id) {
+        main.post(() -> listener.onXrOverlayHover(id));
+    }
+
+    /** Called from the XR frame loop thread. */
+    @Keep
     void onXrOverlayMoved(int id, float yawDeg, float pitchDeg, float tiltDeg, float distance,
                           float widthM) {
         main.post(() -> listener.onXrOverlayMoved(id, yawDeg, pitchDeg, tiltDeg, distance,
@@ -276,10 +312,8 @@ public final class XrGoggleSession {
     }
 
     /**
-     * Whether pointing at an instrument and pulling the trigger may move it. On by default.
-     *
-     * <p>Off gives the trigger back to the video distance unconditionally, which is what it
-     * did before any of this existed.
+     * Whether a controller may point at the instruments and the video and move them. On by
+     * default. Off, there is no beam at all.
      */
     public void setOverlayDragEnabled(boolean enabled) {
         if (handle != 0) nativeSetOverlayDragEnabled(handle, enabled);

@@ -7,6 +7,7 @@ find_package(OpenXR REQUIRED CONFIG)
 
 add_library(${CMAKE_PROJECT_NAME} SHARED
         XrGoggleSession.cpp
+        XrInteraction.cpp
         jni_bindings.cpp)
 
 target_link_libraries(${CMAKE_PROJECT_NAME}
