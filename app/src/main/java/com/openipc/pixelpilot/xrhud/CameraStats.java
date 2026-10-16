@@ -6,6 +6,8 @@ import androidx.annotation.Nullable;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
@@ -52,7 +54,28 @@ public final class CameraStats {
         public int memTotalMb = -1;
         public int txKbit = -1;
         public long uptimeS = -1;
+        /** Whether the camera can switch the OSD it burns in - see scripts/camera. */
+        public boolean osdSwitchable;
+        /** What its msposd draws right now: "camera", "headset" or "none"; null if unknown. */
+        @Nullable
+        public String osdMode;
     }
+
+    /**
+     * The OSD the camera should draw: {@code "camera"} to burn it in, {@code "headset"} not
+     * to, null to leave it alone. Sent as the answer to every push - the only way back to the
+     * camera, since this app cannot open a connection to it - and ignored by a camera that
+     * does not have pixelpilot-osd.
+     */
+    public void setWantedOsd(@Nullable String mode) {
+        wantedOsd = mode;
+    }
+
+    @Nullable
+    private volatile String wantedOsd;
+    @Nullable
+    private String lastOsdMode;
+    private boolean lastOsdSwitchable;
 
     private volatile Snapshot latest = new Snapshot();
     private volatile long latestAt;
@@ -102,10 +125,12 @@ public final class CameraStats {
             while (running) {
                 try (Socket client = ss.accept()) {
                     client.setSoTimeout(3000);
+                    answer(client);
                     final Snapshot s = read(client);
                     if (s != null) {
                         latest = s;
                         latestAt = System.currentTimeMillis();
+                        noteOsd(s);
                     }
                 } catch (SocketTimeoutException e) {
                     // Nothing pushed in the last second, which is normal with the link down.
@@ -122,6 +147,34 @@ public final class CameraStats {
         } finally {
             server = null;
         }
+    }
+
+    /** Before reading: the camera's nc prints whatever arrives, and its script reads that. */
+    private void answer(Socket client) {
+        final String mode = wantedOsd;
+        if (mode == null) {
+            return;
+        }
+        try {
+            final OutputStream out = client.getOutputStream();
+            out.write(("osd=" + mode + "\n").getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+        } catch (Exception e) {
+            // An old camera script may already have closed its side; the readings still count.
+            Log.i(TAG, "could not answer the camera: " + e);
+        }
+    }
+
+    /** Said once per change, so a log shows when the camera actually switched. */
+    private void noteOsd(Snapshot s) {
+        if (s.osdSwitchable == lastOsdSwitchable && java.util.Objects.equals(s.osdMode, lastOsdMode)) {
+            return;
+        }
+        lastOsdSwitchable = s.osdSwitchable;
+        lastOsdMode = s.osdMode;
+        Log.i(TAG, s.osdSwitchable
+                ? "camera OSD: " + s.osdMode + (wantedOsd != null ? " (wanted: " + wantedOsd + ")" : "")
+                : "camera cannot switch its OSD - only the headset's own is switched");
     }
 
     @Nullable
@@ -155,6 +208,12 @@ public final class CameraStats {
                         break;
                     case "uptime_s":
                         s.uptimeS = parseInt(v);
+                        break;
+                    case "osd_switch":
+                        s.osdSwitchable = "1".equals(v);
+                        break;
+                    case "osd_mode":
+                        s.osdMode = v;
                         break;
                     default:
                         // An unknown key is a newer camera script, not an error.

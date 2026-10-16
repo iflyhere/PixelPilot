@@ -1,0 +1,2 @@
+# Shell scripts that run on the camera: a CRLF checkout would break them.
+scripts/camera/* text eol=lf

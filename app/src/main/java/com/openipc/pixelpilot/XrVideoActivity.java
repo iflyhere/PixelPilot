@@ -122,6 +122,15 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     static final String PREF_OVERLAY_DRAG = "xr_overlay_drag";
     static final String PREF_HAND_DRAG = "xr_hand_drag";
     static final String PREF_FLIGHT_LOG = "xr_flight_log";
+    /**
+     * Which OSD is over the video: {@link #OSD_CAMERA} (burned in by the camera's msposd),
+     * {@link #OSD_HEADSET} (this app's symbology) or {@link #OSD_BOTH}, the default and what it
+     * was before there was a choice. The camera follows only if it has scripts/camera.
+     */
+    static final String PREF_OSD_SOURCE = "xr_osd_source";
+    static final String OSD_CAMERA = "camera";
+    static final String OSD_HEADSET = "headset";
+    static final String OSD_BOTH = "both";
     /** One entry per layer and field, e.g. {@code xr_layout_2_yaw}. See saveOverlayPose(). */
     static final String PREF_LAYOUT_PREFIX = "xr_layout_";
     static final String PREF_LAST_VIDEO_W = "xr_last_video_width";
@@ -171,6 +180,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
     /** Two, so the symbology thread never draws one while it is being repainted. */
     private final android.graphics.Bitmap[] statusBuffers = new android.graphics.Bitmap[2];
     private int statusBuffer;
+    /** Whether the headset draws its own symbology - false when the camera burns its OSD in. */
+    private boolean symbologyShown = true;
     private ParcelFileDescriptor dvrFd;
 
     // Link quality haptics
@@ -235,6 +246,14 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         // Its own switch rather than the gesture one: a drag needs the ray on a panel first,
         // which is nothing like the microgestures that made hand input worth turning off.
         xr.setHandDragEnabled(prefs.getBoolean(PREF_HAND_DRAG, false));
+
+        // The camera burns its OSD in for "camera" and "both", and the headset draws its own
+        // for "headset" and "both". A camera without scripts/camera ignores what it is told,
+        // which leaves only the headset's half of the switch working - still useful.
+        final String osd = prefs.getString(PREF_OSD_SOURCE, OSD_BOTH);
+        symbologyShown = !OSD_CAMERA.equals(osd);
+        cameraStats.setWantedOsd(OSD_HEADSET.equals(osd) ? OSD_HEADSET : OSD_CAMERA);
+        Log.i(TAG, "OSD: " + osd);
 
         // On by default. A log that has to be switched on before it is useful is never on
         // when it turns out to be needed, and five samples a second is a few megabytes an
@@ -506,9 +525,12 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
         Log.i(TAG, "overlay layer " + id + " up, " + width + "x" + height);
         final XrOverlay overlay;
         switch (id) {
-            case XrGoggleSession.OVERLAY_SYMBOLOGY:
-                overlay = new XrSymbology(surface, width, height, flightData);
+            case XrGoggleSession.OVERLAY_SYMBOLOGY: {
+                final XrSymbology symbology = new XrSymbology(surface, width, height, flightData);
+                symbology.setSymbologyShown(symbologyShown);
+                overlay = symbology;
                 break;
+            }
             case XrGoggleSession.OVERLAY_DASHBOARD:
                 dashboard = new XrDashboard(surface, width, height, flightData, cameraStats);
                 cameraStats.start();
@@ -583,6 +605,25 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             startActivity(new Intent(this, VideoActivity.class));
             finish();
         }, 2500);
+    }
+
+    /** One line for the status screen: which OSD was asked for, and what the camera does. */
+    private String osdStatus() {
+        final String wanted = prefs().getString(PREF_OSD_SOURCE, OSD_BOTH);
+        final CameraStats.Snapshot cam = cameraStats.snapshot();
+        final String camera;
+        if (!cam.fresh) {
+            camera = "camera not heard from";
+        } else if (!cam.osdSwitchable) {
+            camera = "camera cannot switch its OSD";
+        } else if ("camera".equals(cam.osdMode)) {
+            camera = "camera burns it in";
+        } else if ("headset".equals(cam.osdMode)) {
+            camera = "camera draws none";
+        } else {
+            camera = "camera OSD " + cam.osdMode;
+        }
+        return "OSD: " + wanted + " - " + camera;
     }
 
     private void persistGeometry() {
@@ -693,6 +734,8 @@ public class XrVideoActivity extends LinkClientActivity implements XrGoggleSessi
             y += h / 20f;
         }
         canvas.drawText(xr != null && xr.isHeadLocked() ? "head locked" : "world locked", cx, y, body);
+        y += h / 20f;
+        canvas.drawText(osdStatus(), cx, y, body);
         y += h / 20f;
 
         Paint hint = new Paint(body);

@@ -1,0 +1,110 @@
+#!/bin/sh
+#
+# Switches the OSD that msposd burns into the video on or off, and remembers the choice.
+#
+# Added for PixelPilot's headset mode: the headset draws its own OSD from the same MAVLink
+# stream, so a pilot picks one or the other - or both - in the app, and the app tells the
+# camera through pixelpilot-status. msposd has no way to change this while it runs, so
+# switching is a restart with or without -d (--osd, "draw OSD over the video"). Telemetry
+# keeps flowing without -d: msposd still reads the FC and forwards to the telemetry link.
+# The restart costs about a second of telemetry.
+#
+#   pixelpilot-osd camera    burn the OSD in (msposd -d), and keep it that way
+#   pixelpilot-osd headset   do not burn it in, and keep it that way
+#   pixelpilot-osd mode      the remembered choice: camera or headset
+#   pixelpilot-osd state     what the running msposd does: camera, headset or none
+#   pixelpilot-osd flag      "-d" or nothing, for the msposd line in /usr/bin/wifibroadcast
+#
+# The choice lives in /etc, which is the overlay, so it survives a reboot but not a firmware
+# update. Without the file the camera burns the OSD in, as it did before this existed.
+#
+# Part of PixelPilot's scripts/camera; see the README there for how it is installed.
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+MODE_FILE=/etc/pixelpilot-osd.mode
+
+# The short option for --osd, read from msposd itself: it is -d in every version seen so far
+# (2026-07 and 2026-10), but a firmware update brings a new msposd, and guessing wrong here
+# would mean a camera that silently never draws its OSD again.
+OSD_FLAG=$(msposd --help 2>&1 | awk '/--osd/ {print $1; exit}')
+[ -n "$OSD_FLAG" ] || OSD_FLAG=-d
+
+mode() {
+	if [ "$(cat "$MODE_FILE" 2>/dev/null)" = headset ]; then
+		echo headset
+	else
+		echo camera
+	fi
+}
+
+# msposd's own command line, one argument per line.
+running_args() {
+	pid=$(pidof msposd | awk '{print $1}')
+	[ -n "$pid" ] && tr '\0' '\n' < "/proc/$pid/cmdline"
+}
+
+state() {
+	args=$(running_args)
+	if [ -z "$args" ]; then
+		echo none
+	elif echo "$args" | grep -qxE -- "$OSD_FLAG|--osd"; then
+		echo camera
+	else
+		echo headset
+	fi
+}
+
+# Restarts msposd with the arguments it is running with, minus or plus -d.
+apply() {
+	args=$(running_args)
+	# Not running: the telemetry router is something else (mavfwd), or wifibroadcast has not
+	# got that far yet. The next start reads the mode file through "flag".
+	[ -n "$args" ] || return 0
+	want=$(mode)
+	[ "$(state)" = "$want" ] && return 0
+
+	new=""
+	first=1
+	for a in $args; do
+		# The program name, then any -d: added back below if wanted.
+		if [ $first = 1 ]; then first=0; continue; fi
+		[ "$a" = "$OSD_FLAG" ] && continue
+		[ "$a" = --osd ] && continue
+		new="$new $a"
+	done
+	[ "$want" = camera ] && new="$new $OSD_FLAG"
+
+	kill $(pidof msposd) 2>/dev/null
+	for i in 1 2 3; do
+		pidof msposd >/dev/null || break
+		sleep 1
+	done
+	# shellcheck disable=SC2086 - the arguments are meant to split
+	setsid msposd $new </dev/null >/dev/null 2>&1 &
+	logger -t pixelpilot-osd "msposd restarted for the $want OSD:$new" 2>/dev/null
+}
+
+case "$1" in
+	camera | headset)
+		if [ "$(mode)" != "$1" ]; then
+			echo "$1" > "$MODE_FILE.new" && mv "$MODE_FILE.new" "$MODE_FILE"
+		fi
+		apply
+		;;
+	mode)
+		mode
+		;;
+	state)
+		state
+		;;
+	flag)
+		[ "$(mode)" = camera ] && printf '%s' "$OSD_FLAG"
+		;;
+	*)
+		echo "usage: $0 camera|headset|mode|state|flag" >&2
+		exit 2
+		;;
+esac
+exit 0

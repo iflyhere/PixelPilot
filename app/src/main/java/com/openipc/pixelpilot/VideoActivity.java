@@ -30,6 +30,7 @@ import android.text.format.Formatter;
 import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.Menu;
 import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.SubMenu;
@@ -825,6 +826,30 @@ public class VideoActivity extends LinkClientActivity
                 return true;
             });
         }
+
+        // Which OSD is over the video. The camera follows only with scripts/camera installed;
+        // otherwise this switches the headset's own symbology and nothing else.
+        SubMenu osdMenu = xrMenu.addSubMenu("OSD over the video");
+        final String osdNow = prefs.getString(XrVideoActivity.PREF_OSD_SOURCE, XrVideoActivity.OSD_BOTH);
+        final String[][] osdChoices = {
+                {XrVideoActivity.OSD_CAMERA, "Camera (burned in by msposd)"},
+                {XrVideoActivity.OSD_HEADSET, "Headset (from MAVLink)"},
+                {XrVideoActivity.OSD_BOTH, "Both"},
+        };
+        for (String[] choice : osdChoices) {
+            MenuItem item = osdMenu.add(1, Menu.NONE, Menu.NONE, choice[1]);
+            item.setCheckable(true);
+            item.setChecked(choice[0].equals(osdNow));
+            item.setOnMenuItemClickListener(clicked -> {
+                prefs.edit().putString(XrVideoActivity.PREF_OSD_SOURCE, choice[0]).apply();
+                Toast.makeText(this, XrVideoActivity.OSD_BOTH.equals(choice[0])
+                        ? "Camera and headset OSD - takes effect when VR starts"
+                        : choice[1] + " - takes effect when VR starts; the camera follows only "
+                                + "with PixelPilot's camera scripts installed", Toast.LENGTH_LONG).show();
+                return true;
+            });
+        }
+        osdMenu.setGroupCheckable(1, true, true);
 
         // Mirrored across both controllers, so one is enough. Head lock is not on a
         // button - the Touch profile ran out of them - it is the checkbox above.

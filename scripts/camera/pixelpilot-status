@@ -1,0 +1,94 @@
+#!/bin/sh
+#
+# Publishes camera health where the ground station can read it.
+#
+# Added for PixelPilot's headset HUD. None of this crosses the air link as telemetry -
+# Betaflight's MAVLink carries no temperatures at all - so the camera is asked directly over
+# the wfb-ng tunnel. The camera is also the part of an OpenIPC setup that thermally throttles
+# and eventually dies in summer, which makes its temperature the one worth having.
+#
+# Published twice, because neither route works on its own:
+#
+#  - as a file under a busybox httpd on port 8080, which is how a shell on the headset can
+#    read it. Not through majestic on port 80: it authenticates everything that is not
+#    localhost, and it answers 500 for every CGI anyway, haserl included.
+#
+#  - pushed over TCP to the ground station at 10.5.0.3:9099, which is how the app reads it.
+#    Android excludes a VpnService owner from its own tunnel, so PixelPilot cannot route to
+#    10.5.0.10 even though a shell on the same headset can. Pushing inverts the direction, and
+#    an inbound packet to a bound socket is not route filtered.
+#
+# Written to a temporary name and renamed, so a reader never sees half a file.
+#
+# The push is also the one way back: the app answers on the same connection with the OSD it
+# wants ("osd=camera" or "osd=headset"), and this hands that to pixelpilot-osd. An app that
+# does not answer, or a camera without pixelpilot-osd, simply leaves the OSD as it is.
+#
+# To remove: delete this script and the line that starts it in /etc/rc.local.
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+# In RAM. It was /var/www/pp at first, which is the jffs2 overlay - flash, rewritten every two
+# seconds for nothing. The busybox httpd in rc.local serves this directory.
+DIR=/tmp/pixelpilot
+OUT=$DIR/pixelpilot.txt
+TMP="$OUT.new"
+mkdir -p "$DIR"
+INTERVAL=2
+SAMPLE=0.3
+
+cpu_jiffies() {
+	awk '/^cpu /{idle=$5; total=0; for (i=2; i<=NF; i++) total+=$i; print total, idle}' /proc/stat
+}
+
+wlan_tx_bytes() {
+	awk '/wlan0/{print $10; exit}' /proc/net/dev
+}
+
+while :; do
+	# Two samples, because a percentage or a rate from one reading is meaningless. This is
+	# also why the load average is not published: this SoC reports 12 on two cores while
+	# sitting at 8% busy, because the driver threads inflate it.
+	C0=$(cpu_jiffies)
+	X0=$(wlan_tx_bytes)
+	sleep $SAMPLE
+	C1=$(cpu_jiffies)
+	X1=$(wlan_tx_bytes)
+
+	CPU=$(echo "$C0 $C1" | awk '{dt=$3-$1; di=$4-$2; printf "%.0f", (dt>0) ? 100*(dt-di)/dt : 0}')
+	# Real air throughput, which beats reporting the configured bitrate: it includes FEC and
+	# it is what the link is actually carrying.
+	TX=$(echo "$X0 $X1" | awk -v s="$SAMPLE" '{printf "%.0f", ($2-$1)*8/1000/s}')
+
+	TEMP=$(ipcinfo --temp 2>/dev/null | tr -d ' \n')
+	UP=$(awk '{printf "%d", $1}' /proc/uptime)
+	# MemAvailable, not MemFree: free counts nothing the page cache holds but would give
+	# back, which on 90MB of RAM reads alarmingly low for no reason.
+	MEM=$(awk '/^MemTotal/{t=$2} /^MemAvailable/{a=$2} END{printf "%d %d", (t-a)/1024, t/1024}' /proc/meminfo)
+
+	{
+		echo "temp_c=${TEMP:-nan}"
+		echo "cpu_pct=$CPU"
+		echo "$MEM" | awk '{print "mem_used_mb=" $1 "\nmem_total_mb=" $2}'
+		echo "tx_kbit=$TX"
+		echo "uptime_s=$UP"
+		# What the app needs for its OSD switch: that this camera can switch, and which OSD
+		# the running msposd actually draws - not just what was asked for.
+		if command -v pixelpilot-osd >/dev/null 2>&1; then
+			echo "osd_switch=1"
+			echo "osd_mode=$(pixelpilot-osd state)"
+		fi
+	} > "$TMP" 2>/dev/null && mv "$TMP" "$OUT"
+
+	# -w keeps this from blocking when nothing is listening, which is most of the time.
+	REPLY=$(busybox nc -w 2 10.5.0.3 9099 < "$OUT" 2>/dev/null)
+	if command -v pixelpilot-osd >/dev/null 2>&1; then
+		case "$REPLY" in
+			*osd=headset*) pixelpilot-osd headset ;;
+			*osd=camera*) pixelpilot-osd camera ;;
+		esac
+	fi
+
+	sleep $INTERVAL
+done

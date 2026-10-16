@@ -29,12 +29,18 @@ public final class XrSymbology extends XrOverlay {
      */
     @androidx.annotation.Nullable
     private volatile android.graphics.Bitmap backdrop;
+    private volatile boolean symbologyShown = true;
     private final Paint backdropPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final android.graphics.RectF backdropRect = new android.graphics.RectF();
 
     /** Null takes it away. The bitmap must not be drawn into after it is handed over. */
     public void setBackdrop(@androidx.annotation.Nullable android.graphics.Bitmap bitmap) {
         backdrop = bitmap;
+    }
+
+    /** False when the camera burns its own OSD in: the layer then only carries the backdrop. */
+    public void setSymbologyShown(boolean shown) {
+        symbologyShown = shown;
     }
 
     public XrSymbology(Surface surface, int width, int height, FlightData data) {
@@ -53,6 +59,9 @@ public final class XrSymbology extends XrOverlay {
         if (b != null) {
             backdropRect.set(0f, 0f, width, height);
             canvas.drawBitmap(b, null, backdropRect, backdropPaint);
+        }
+        if (!symbologyShown) {
+            return;
         }
 
         if (s.fresh) {
